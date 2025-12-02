@@ -2,30 +2,34 @@
 #include <QDataStream>
 #include <QDebug>
 
+namespace {
+QAudioFormat chooseFormat(const QAudioDevice &device, const QAudioFormat &hint = QAudioFormat()) {
+    QList<QAudioFormat> candidates;
+    if (hint.isValid()) candidates << hint;
+    candidates << device.preferredFormat();
+    QAudioFormat mono441;
+    mono441.setSampleRate(44100);
+    mono441.setChannelCount(1);
+    mono441.setSampleFormat(QAudioFormat::Int16);
+    QAudioFormat mono48 = mono441;
+    mono48.setSampleRate(48000);
+    candidates << mono48 << mono441;
+
+    for (const QAudioFormat &f : candidates) {
+        if (f.isValid() && device.isFormatSupported(f)) {
+            return f;
+        }
+    }
+    return QAudioFormat();
+}
+}
+
 Voice::Voice(QObject *parent) : QObject(parent) {}
 
 bool Voice::startVoiceTransmission() {
-    QAudioDevice device = QMediaDevices::defaultAudioInput();
-    // Try preferred; if not supported, iterate fallback list.
-    QList<QAudioFormat> candidates;
-    candidates << device.preferredFormat();
-    QAudioFormat fallback;
-    fallback.setSampleRate(44100);
-    fallback.setChannelCount(1);
-    fallback.setSampleFormat(QAudioFormat::Int16);
-    candidates << fallback;
-    fallback.setSampleRate(48000);
-    candidates << fallback;
-
-    bool supported = false;
-    for (const QAudioFormat &f : candidates) {
-        if (f.isValid() && device.isFormatSupported(f)) {
-            format = f;
-            supported = true;
-            break;
-        }
-    }
-    if (!supported) {
+    QAudioDevice device = inputDev.isNull() ? QMediaDevices::defaultAudioInput() : inputDev;
+    format = chooseFormat(device, format);
+    if (!format.isValid()) {
         qWarning() << "Input device does not support preferred/44.1k/48k 16bit mono:" << device.description();
         return false;
     }
@@ -80,29 +84,14 @@ void Voice::playReceivedAudio(const QByteArray &audioData) {
         format.setChannelCount(1);
         format.setSampleFormat(QAudioFormat::Int16);
     }
-    QAudioDevice outDev = QMediaDevices::defaultAudioOutput();
+    QAudioDevice outDev = outputDev.isNull() ? QMediaDevices::defaultAudioOutput() : outputDev;
     if (!outDev.isFormatSupported(format)) {
-        QList<QAudioFormat> outs;
-        outs << outDev.preferredFormat();
-        QAudioFormat f441;
-        f441.setSampleRate(44100);
-        f441.setChannelCount(1);
-        f441.setSampleFormat(QAudioFormat::Int16);
-        QAudioFormat f48 = f441;
-        f48.setSampleRate(48000);
-        outs << f441 << f48;
-        bool ok = false;
-        for (const QAudioFormat &f : outs) {
-            if (f.isValid() && outDev.isFormatSupported(f)) {
-                format = f;
-                ok = true;
-                break;
-            }
-        }
-        if (!ok) {
+        QAudioFormat f = chooseFormat(outDev, format);
+        if (!f.isValid()) {
             qWarning() << "Output device does not support preferred/44.1k/48k 16bit mono:" << outDev.description();
             return;
         }
+        format = f;
     }
     if (!audioSink) {
         audioSink = new QAudioSink(outDev, format, this);
@@ -130,4 +119,21 @@ void Voice::setOutputVolume(qreal volume) {
         audioSink->setVolume(volume);
     }
     outputVolume = volume;
+}
+
+void Voice::setInputDevice(const QAudioDevice &device) {
+    inputDev = device;
+    if (audioSource) {
+        stopVoiceTransmission();
+    }
+}
+
+void Voice::setOutputDevice(const QAudioDevice &device) {
+    outputDev = device;
+    if (audioSink) {
+        audioSink->stop();
+        audioSink->deleteLater();
+        audioSink = nullptr;
+        outputDevice = nullptr;
+    }
 }

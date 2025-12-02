@@ -28,25 +28,57 @@
 #include <QAudioDevice>
 #include <QListWidgetItem>
 #include <QMenu>
+#include <QSettings>
+#include <QDir>
+#include <QCoreApplication>
+#include <QAudioFormat>
+#include <QProcess>
+#include <QRegularExpression>
+#include <QIcon>
+#include <algorithm>
 
 #include "message_protocol.h"
 #include "types.h"
 
 ChatWindow::ChatWindow(QWidget *parent) : QWidget(parent) {
-    hostValue = qEnvironmentVariable("APP_HOST", "vagabovnr.ru");
-    portValue = static_cast<quint16>(qEnvironmentVariableIntValue("APP_PORT", nullptr) ? qEnvironmentVariableIntValue("APP_PORT", nullptr) : 12345);
-    userValue = qEnvironmentVariable("APP_USER", "demo");
-    passValue = qEnvironmentVariable("APP_PASS", "demo");
-    // Registration handled externally (e.g., via Telegram bot); client only logs in.
+    hostValue = "213.171.26.107"; // default server IP
+    portValue = 12345;
+    userValue = QString();
+    passValue = QString();
 
-    sendButton = new QPushButton("Send", this);
-    micToggleButton = new QPushButton("Mic Off", this);
+    const QSize iconSize(20, 20);
+
+    sendButton = new QPushButton(this);
+    sendButton->setIcon(QIcon(":/icons/icons/send-message.svg"));
+    sendButton->setIconSize(iconSize);
+    sendButton->setToolTip("Send message");
+    micToggleButton = new QPushButton(this);
+    micToggleButton->setIcon(QIcon(":/icons/icons/mic-off.svg"));
+    micToggleButton->setIconSize(iconSize);
+    micToggleButton->setToolTip("Toggle microphone");
     micToggleButton->setCheckable(true);
-    shareToggleButton = new QPushButton("Share Screen", this);
+    micToggleButton->setFixedSize(32, 32);
+    muteButton = new QPushButton(this);
+    muteButton->setIcon(QIcon(":/icons/icons/sound.svg"));
+    muteButton->setIconSize(iconSize);
+    muteButton->setToolTip("Mute / Unmute playback");
+    muteButton->setCheckable(true);
+    muteButton->setFixedSize(32, 32);
+    shareToggleButton = new QPushButton(this);
+    shareToggleButton->setIcon(QIcon(":/icons/icons/screen-sharing.svg"));
+    shareToggleButton->setIconSize(iconSize);
+    shareToggleButton->setToolTip("Start/Stop screen share");
     shareToggleButton->setCheckable(true);
-    logoutButton = new QPushButton("Logout", this);
-    settingsButton = new QPushButton("Settings", this);
-    watchButton = new QPushButton("Watch", this);
+    shareToggleButton->setFixedSize(32, 32);
+    logoutButton = new QPushButton(this);
+    logoutButton->setIcon(QIcon(":/icons/icons/logout.svg"));
+    logoutButton->setIconSize(iconSize);
+    logoutButton->setToolTip("Logout");
+    settingsButton = new QPushButton(this);
+    settingsButton->setIcon(QIcon(":/icons/icons/settings.svg"));
+    settingsButton->setIconSize(iconSize);
+    settingsButton->setToolTip("Settings");
+    settingsButton->setFixedSize(32, 32);
 
     sendButton->setEnabled(false);
     micToggleButton->setEnabled(false);
@@ -63,84 +95,115 @@ ChatWindow::ChatWindow(QWidget *parent) : QWidget(parent) {
     userList = new QListWidget(this);
     userList->setMinimumWidth(160);
     userList->setContextMenuPolicy(Qt::CustomContextMenu);
-    streamSelector = new QComboBox(this);
-    streamSelector->addItem("Local preview");
-
     userLabel = new QLabel("User: -", this);
     connectionLabel = new QLabel("Disconnected", this);
+    // keep single instance
 
+    loginUserEdit = new QLineEdit(this);
+    loginPassEdit = new QLineEdit(this);
+    loginPassEdit->setEchoMode(QLineEdit::Password);
+    loginButton = new QPushButton("Login", this);
+    loginStatusLabel = new QLabel(this);
+    loginStatusLabel->setStyleSheet("color:red");
+    loginStatusLabel->setVisible(false);
+    loginConnectionLabel = new QLabel("Offline", this);
+    loginConnectionLabel->setStyleSheet("color:red");
+    pingLabel = new QLabel("Ping: n/a", this);
+    pingLabel->setVisible(false);
+    updateMicButtonState(false);
+    updateShareButtonState(false);
+    updateMuteButtonState(false);
+
+    auto loginLayout = new QHBoxLayout();
+    loginLayout->addWidget(loginConnectionLabel);
+    loginLayout->addWidget(new QLabel("User:", this));
+    loginLayout->addWidget(loginUserEdit);
+    loginLayout->addWidget(new QLabel("Password:", this));
+    loginLayout->addWidget(loginPassEdit);
+    loginLayout->addWidget(loginButton);
+    loginLayout->addWidget(loginStatusLabel);
     auto topLayout = new QHBoxLayout();
     topLayout->addWidget(userLabel);
     topLayout->addWidget(connectionLabel);
+    topLayout->addWidget(pingLabel);
     topLayout->addStretch();
-    topLayout->addWidget(settingsButton);
     topLayout->addWidget(logoutButton);
 
     auto controlsLayout = new QHBoxLayout();
+    controlsLayout->setContentsMargins(0, 4, 0, 0);
+    controlsLayout->setSpacing(6);
+    controlsLayout->setAlignment(Qt::AlignCenter);
     controlsLayout->addWidget(shareToggleButton);
     controlsLayout->addWidget(micToggleButton);
-    controlsLayout->addWidget(watchButton);
-    controlsLayout->addWidget(new QLabel("Stream:", this));
-    controlsLayout->addWidget(streamSelector);
+    controlsLayout->addWidget(muteButton);
+    controlsLayout->addWidget(settingsButton);
 
     auto bottomLayout = new QHBoxLayout();
     bottomLayout->addWidget(messageEdit);
     bottomLayout->addWidget(sendButton);
 
     auto mainLayout = new QHBoxLayout();
-    mainLayout->addWidget(userList, /*stretch*/1);
-    userList->setMaximumWidth(50);
-    mainLayout->addWidget(sharePreview, /*stretch*/3);
+    userList->setMaximumWidth(150);
+    auto leftColumn = new QVBoxLayout();
+    leftColumn->addWidget(userList, /*stretch*/1);
+    leftColumn->addLayout(controlsLayout);
+    mainLayout->addLayout(leftColumn, /*stretch*/1);
 
+    auto rightColumn = new QVBoxLayout();
+    sharePreview->setMinimumHeight(200);
+    sharePreview->setVisible(false);
+    streamVolumeLabel = new QLabel("Stream volume", this);
+    streamVolumeSlider = new QSlider(Qt::Horizontal, this);
+    streamVolumeSlider->setRange(0, 100);
+    streamVolumeSlider->setValue(static_cast<int>(outputVolume * 100));
+    streamVolumeLabel->setVisible(false);
+    streamVolumeSlider->setVisible(false);
+    rightColumn->addWidget(sharePreview, /*stretch*/3);
+    auto streamVolLayout = new QHBoxLayout();
+    streamVolLayout->addWidget(streamVolumeLabel);
+    streamVolLayout->addWidget(streamVolumeSlider);
+    rightColumn->addLayout(streamVolLayout);
+    rightColumn->addWidget(chatView, /*stretch*/2);
+    rightColumn->addLayout(bottomLayout);
+    mainLayout->addLayout(rightColumn, /*stretch*/4);
 
     auto outer = new QVBoxLayout();
     outer->addLayout(topLayout);
-    outer->addLayout(controlsLayout);
     outer->addLayout(mainLayout);
-    outer->addWidget(new QLabel("Chat", this));
-    outer->addWidget(chatView);
-    chatView->setMaximumHeight(100);
-    outer->addLayout(bottomLayout);
-    setLayout(outer);
+
+    mainPanel = new QWidget(this);
+    mainPanel->setLayout(outer);
+
+    auto rootLayout = new QVBoxLayout();
+    loginPanel = new QWidget(this);
+    loginPanel->setLayout(loginLayout);
+    rootLayout->addWidget(loginPanel);
+    rootLayout->addWidget(mainPanel);
+    setLayout(rootLayout);
 
     auth.setSocket(&socket);
 
     connect(sendButton, &QPushButton::clicked, this, &ChatWindow::onSendClicked);
+    connect(messageEdit, &QLineEdit::returnPressed, this, &ChatWindow::onSendClicked);
     connect(micToggleButton, &QPushButton::clicked, this, &ChatWindow::onMicToggle);
     connect(shareToggleButton, &QPushButton::clicked, this, &ChatWindow::onShareConfig);
     connect(logoutButton, &QPushButton::clicked, this, &ChatWindow::onLogout);
     connect(settingsButton, &QPushButton::clicked, this, &ChatWindow::onOpenSettings);
-    connect(watchButton, &QPushButton::clicked, this, [this]() {
-        if (watchingRemote) {
-            streamSelector->setCurrentIndex(0);
-            watchingRemote = false;
-            watchButton->setText("Watch");
-        } else {
-            if (streamSelector->currentIndex() == 0 && streamSelector->count() > 1) {
-                streamSelector->setCurrentIndex(1);
-            }
-            if (streamSelector->currentIndex() > 0) {
-                watchingRemote = true;
-                watchButton->setText("Stop watching");
-            }
-        }
-    });
     connect(&socket, &QTcpSocket::readyRead, this, &ChatWindow::onSocketReadyRead);
     connect(&socket, &QTcpSocket::connected, this, &ChatWindow::onSocketConnected);
     connect(&socket, &QTcpSocket::disconnected, this, &ChatWindow::onSocketDisconnected);
     connect(&socket, &QTcpSocket::errorOccurred, this, &ChatWindow::onSocketError);
     connect(&auth, &Authentication::loginResult, this, &ChatWindow::onLoginResult);
     connect(&auth, &Authentication::loginError, this, [this](const QString &msg) {
-        if (showLoginDialog(msg.isEmpty() ? "Login failed" : msg)) {
-            startConnection();
-        }
+        updateLoginStatus(msg.isEmpty() ? "Login failed" : msg, "red");
+        loggedIn = false;
+        setLoggedInUi(false);
     });
     connect(&chat, &Chat::messageToSend, &socket, [this](const QByteArray &data) { socket.write(data); });
     connect(&chat, &Chat::messageReceived, this, &ChatWindow::onMessageReceived);
     connect(&screenShare, &ScreenShare::frameReady, this, &ChatWindow::onFrameReady);
     connect(&screenShare, &ScreenShare::started, []() {});
     connect(&screenShare, &ScreenShare::stopped, []() {});
-    connect(streamSelector, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ChatWindow::onStreamSelected);
     connect(&voice, &Voice::audioChunkReady, this, [this](const QByteArray &data) {
         if (!loggedIn) return;
         Message msg;
@@ -152,31 +215,68 @@ ChatWindow::ChatWindow(QWidget *parent) : QWidget(parent) {
     connect(&voice, &Voice::playbackError, this, [this](const QString &msg) {
         QMessageBox::warning(this, "Audio playback", msg);
     });
+    connect(streamVolumeSlider, &QSlider::valueChanged, this, [this](int value) {
+        onOutputVolume(value);
+    });
+    connect(muteButton, &QPushButton::clicked, this, &ChatWindow::onMuteToggle);
     voice.setPlaybackEnabled(true);
-    voice.setVolumes(1.0, 1.0);
+    loadPersistentConfig();
+    loginUserEdit->setText(userValue);
+    loginPassEdit->setText(passValue);
+    voice.setVolumes(micVolume, outputVolume);
+    // Apply saved devices if present
+    auto findDeviceById = [](const QList<QAudioDevice> &list, const QByteArray &id) -> QAudioDevice {
+        for (const auto &d : list) {
+            if (d.id() == id) return d;
+        }
+        return QAudioDevice();
+    };
+    if (!inputDeviceId.isEmpty()) {
+        QAudioDevice dev = findDeviceById(QMediaDevices::audioInputs(), inputDeviceId);
+        if (!dev.isNull()) voice.setInputDevice(dev);
+    }
+    if (!outputDeviceId.isEmpty()) {
+        QAudioDevice dev = findDeviceById(QMediaDevices::audioOutputs(), outputDeviceId);
+        if (!dev.isNull()) voice.setOutputDevice(dev);
+    }
+
     connect(userList, &QListWidget::customContextMenuRequested, this, &ChatWindow::onUserContextMenuRequested);
     connect(userList, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *item) {
         if (!item) return;
         const QString text = item->data(Qt::UserRole).toString();
-        if (streamSelector->findText(text) != -1) {
-            streamSelector->setCurrentText(text);
+        if (streamingUsers.contains(text)) {
+            currentStreamUser = text;
             watchingRemote = true;
-            watchButton->setText("Stop watching");
+            if (streamFrames.contains(text)) {
+                sharePreview->setPixmap(streamFrames[text].scaled(sharePreview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                sharePreview->setVisible(true);
+            }
+            streamVolumeLabel->setVisible(true);
+            streamVolumeSlider->setVisible(true);
         }
     });
 
     setWindowTitle("Qt Chat Client");
     resize(1100, 700);
-    hide();
+    mainPanel->setVisible(false);
+    setLoggedInUi(false);
+    show(); // главное окно видно сразу
 
     connectionTimer = new QTimer(this);
     connect(connectionTimer, &QTimer::timeout, this, &ChatWindow::updateConnectionStatus);
     connectionTimer->start(1000);
+    pingTimer = new QTimer(this);
+    connect(pingTimer, &QTimer::timeout, this, &ChatWindow::updatePing);
+    pingTimer->start(5000);
+    updatePing();
 
-    if (showLoginDialog()) {
+    connect(loginButton, &QPushButton::clicked, this, &ChatWindow::onConnectClicked);
+    connect(loginPassEdit, &QLineEdit::returnPressed, this, &ChatWindow::onConnectClicked);
+
+    if (!userValue.isEmpty() && !passValue.isEmpty()) {
+        loginUserEdit->setText(userValue);
+        loginPassEdit->setText(passValue);
         startConnection();
-    } else {
-        QTimer::singleShot(0, this, []() { qApp->quit(); });
     }
 }
 
@@ -185,32 +285,43 @@ void ChatWindow::appendLog(const QString &text) {
 }
 
 void ChatWindow::onConnectClicked() {
-    if (showLoginDialog()) {
-        startConnection();
+    userValue = loginUserEdit->text().trimmed();
+    passValue = loginPassEdit->text();
+    if (userValue.isEmpty() || passValue.isEmpty()) {
+        updateLoginStatus("Enter login and password", "red");
+        return;
     }
+    updateLoginStatus("Connecting...", "orange");
+    savePersistentConfig();
+    startConnection();
 }
 
 void ChatWindow::onSocketConnected() {
     const QString user = userValue;
     const QString pass = passValue;
+    updateLoginStatus("Authorizing...", "orange");
     auth.login(user, pass);
+    loginUserEdit->setEnabled(false);
+    loginPassEdit->setEnabled(false);
+    loginButton->setEnabled(false);
 }
 
 void ChatWindow::onSocketDisconnected() {
     loggedIn = false;
     setLoggedInUi(false);
-    // Show login dialog if we haven't authenticated yet
-    if (!loggedIn) {
-        if (showLoginDialog("Connection lost")) {
-            startConnection();
-        } else {
-            qApp->quit();
-        }
-    }
+    updateLoginStatus("Disconnected", "red");
+    loginUserEdit->setEnabled(true);
+    loginPassEdit->setEnabled(true);
+    loginButton->setEnabled(true);
 }
 
 void ChatWindow::onSocketError(QAbstractSocket::SocketError) {
     appendLog(QStringLiteral("Connection error: %1").arg(socket.errorString()));
+    setLoggedInUi(false);
+    updateLoginStatus(QStringLiteral("Error: %1").arg(socket.errorString()), "red");
+    loginUserEdit->setEnabled(true);
+    loginPassEdit->setEnabled(true);
+    loginButton->setEnabled(true);
 }
 
 void ChatWindow::onLoginResult(bool ok) {
@@ -219,14 +330,22 @@ void ChatWindow::onLoginResult(bool ok) {
         chat.setSender(auth.currentUsername());
         userLabel->setText(QStringLiteral("User: %1").arg(auth.currentUsername()));
         setLoggedInUi(true);
+        updateLoginStatus("Logged in", "green");
+        loginUserEdit->setEnabled(true);
+        loginPassEdit->setEnabled(true);
+        loginButton->setEnabled(true);
         sendHistoryRequest();
         requestUsersList();
+        savePersistentConfig();
         showNormal();
         raise();
         activateWindow();
     } else {
         setLoggedInUi(false);
-        showLoginDialog("Login failed. Try again.");
+        updateLoginStatus("Login failed. Try again.", "red");
+        loginUserEdit->setEnabled(true);
+        loginPassEdit->setEnabled(true);
+        loginButton->setEnabled(true);
     }
 }
 
@@ -278,6 +397,10 @@ void ChatWindow::onSocketReadyRead() {
             continue;
         }
         if (msg.type == MessageType::HistoryResponse) {
+            const QStringList lines = QString::fromUtf8(msg.payload).split("\n", Qt::SkipEmptyParts);
+            for (const auto &line : lines) {
+                chatView->append(line);
+            }
             continue;
         }
     if (msg.type == MessageType::UsersListResponse) {
@@ -300,15 +423,13 @@ void ChatWindow::onSocketReadyRead() {
                 // Stream stopped
                 streamingUsers.remove(msg.sender);
                 streamFrames.remove(msg.sender);
-                int idx = streamSelector->findText(msg.sender);
-                if (idx > 0) {
-                    streamSelector->removeItem(idx);
-                }
-                if (streamSelector->currentText() == msg.sender) {
-                    streamSelector->setCurrentIndex(0);
-                    sharePreview->setText("Screen preview");
+                if (watchingRemote && currentStreamUser == msg.sender) {
                     watchingRemote = false;
-                    watchButton->setText("Watch");
+                    currentStreamUser.clear();
+                    sharePreview->clear();
+                    sharePreview->setVisible(false);
+                    streamVolumeLabel->setVisible(false);
+                    streamVolumeSlider->setVisible(false);
                 }
                 updateUserListDisplay();
             } else {
@@ -320,11 +441,11 @@ void ChatWindow::onSocketReadyRead() {
                     QPixmap pix = QPixmap::fromImage(image);
                     streamFrames[msg.sender] = pix;
                     streamingUsers.insert(msg.sender);
-                    if (streamSelector->findText(msg.sender) == -1) {
-                        streamSelector->addItem(msg.sender);
-                    }
-                    if (streamSelector->currentText() == msg.sender) {
+                    if (watchingRemote && currentStreamUser == msg.sender) {
                         sharePreview->setPixmap(pix.scaled(sharePreview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                        sharePreview->setVisible(true);
+                        streamVolumeLabel->setVisible(true);
+                        streamVolumeSlider->setVisible(true);
                     }
                     updateUserListDisplay();
                 }
@@ -338,35 +459,44 @@ void ChatWindow::onSocketReadyRead() {
 }
 
 void ChatWindow::onMicToggle() {
+    if (micMuted) {
+        muteButton->setChecked(true);
+        updateMuteButtonState(true);
+        return;
+    }
     if (!micOn) {
         if (voice.startVoiceTransmission()) {
             micOn = true;
-            micToggleButton->setChecked(true);
-            micToggleButton->setText("Mic On");
+            updateMicButtonState(true);
         } else {
+            micOn = false;
             micToggleButton->setChecked(false);
-            micToggleButton->setText("Mic Off");
+            updateMicButtonState(false);
         }
     } else {
         voice.stopVoiceTransmission();
         micOn = false;
         micToggleButton->setChecked(false);
-        micToggleButton->setText("Mic Off");
+        updateMicButtonState(false);
     }
 }
 
 void ChatWindow::onMicVolume(int value) {
-    voice.setInputVolume(value / 100.0);
+    micVolume = value / 100.0;
+    voice.setInputVolume(micVolume);
+    savePersistentConfig();
 }
 
 void ChatWindow::onOutputVolume(int value) {
-    voice.setOutputVolume(value / 100.0);
+    outputVolume = value / 100.0;
+    voice.setOutputVolume(outputVolume);
+    savePersistentConfig();
 }
 
 void ChatWindow::onScreenShareStart() {
     if (!screenShare.isCapturing()) {
-        shareToggleButton->setText("Stop Share");
         shareToggleButton->setChecked(true);
+        updateShareButtonState(true);
         screenShare.setFps(shareFps);
         screenShare.startCapturing(1000 / shareFps);
     }
@@ -376,9 +506,14 @@ void ChatWindow::onScreenShareStop() {
     if (screenShare.isCapturing()) {
         screenShare.stopCapturing();
     }
-    shareToggleButton->setText("Share Screen");
     shareToggleButton->setChecked(false);
-    sharePreview->setText("Screen preview");
+    updateShareButtonState(false);
+    if (!watchingRemote) {
+        sharePreview->setPixmap(QPixmap());
+        sharePreview->setText("Screen preview");
+        sharePreview->setVisible(false);
+        isLocalSharingPreviewVisible = false;
+    }
     // notify others that stream ended via empty frame
     Message msg;
     msg.type = MessageType::ScreenFrame;
@@ -387,14 +522,22 @@ void ChatWindow::onScreenShareStop() {
     socket.write(MessageProtocol::encodeMessage(msg));
     streamingUsers.remove(auth.currentUsername());
     streamFrames.remove(auth.currentUsername());
-    int idx = streamSelector->findText(auth.currentUsername());
-    if (idx > 0) streamSelector->removeItem(idx);
+    if (watchingRemote && currentStreamUser == auth.currentUsername()) {
+        watchingRemote = false;
+        currentStreamUser.clear();
+        sharePreview->clear();
+        sharePreview->setVisible(false);
+    }
     updateUserListDisplay();
 }
 
 void ChatWindow::onFrameReady(const QPixmap &frame) {
     if (!frame.isNull()) {
-        sharePreview->setPixmap(frame.scaled(sharePreview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        QPixmap pix = frame.scaled(sharePreview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        // local preview for own stream
+        sharePreview->setPixmap(pix);
+        sharePreview->setVisible(true);
+        isLocalSharingPreviewVisible = true;
         if (!loggedIn) return;
         // Send compressed frame to server
         QImage img = frame.toImage().scaled(shareResolution, Qt::KeepAspectRatio, Qt::SmoothTransformation);
@@ -438,6 +581,7 @@ void ChatWindow::onShareConfig() {
         shareFps = fps;
         shareResolution = res;
         shareQuality = quality;
+        savePersistentConfig();
         onScreenShareStart();
     }
 }
@@ -447,31 +591,22 @@ void ChatWindow::onUserContextMenuRequested(const QPoint &pos) {
     if (!item) return;
     const QString uname = item->data(Qt::UserRole).toString();
     QMenu menu(this);
-    if (streamSelector->findText(uname) != -1 || streamingUsers.contains(uname)) {
+    if (streamingUsers.contains(uname)) {
         QAction *watchAct = menu.addAction("Watch stream");
         connect(watchAct, &QAction::triggered, this, [this, uname]() {
-            int idx = streamSelector->findText(uname);
-            if (idx != -1) {
-                streamSelector->setCurrentIndex(idx);
-                watchingRemote = true;
-                watchButton->setText("Stop watching");
+            currentStreamUser = uname;
+            watchingRemote = true;
+            if (streamFrames.contains(uname)) {
+                sharePreview->setPixmap(streamFrames[uname].scaled(sharePreview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            } else {
+                sharePreview->setText("Waiting for frames...");
             }
+            sharePreview->setVisible(true);
+            streamVolumeLabel->setVisible(true);
+            streamVolumeSlider->setVisible(true);
         });
     }
     menu.exec(userList->viewport()->mapToGlobal(pos));
-}
-
-void ChatWindow::onStreamSelected(int) {
-    const QString sel = streamSelector->currentText();
-    if (streamFrames.contains(sel)) {
-        sharePreview->setPixmap(streamFrames[sel].scaled(sharePreview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
-        watchingRemote = (streamSelector->currentIndex() > 0);
-        watchButton->setText(watchingRemote ? "Stop watching" : "Watch");
-    } else {
-        sharePreview->setText("Screen preview");
-        watchingRemote = false;
-        watchButton->setText("Watch");
-    }
 }
 
 void ChatWindow::onLogout() {
@@ -480,9 +615,8 @@ void ChatWindow::onLogout() {
         socket.disconnectFromHost();
         streamFrames.clear();
         streamingUsers.clear();
-        streamSelector->clear();
-        streamSelector->addItem("Local preview");
         updateUserListDisplay();
+        updateLoginStatus("Logged out", "orange");
     } else {
         startConnection();
     }
@@ -490,81 +624,88 @@ void ChatWindow::onLogout() {
 
 void ChatWindow::onOpenSettings() {
     QDialog dlg(this);
-    dlg.setWindowTitle("Audio Settings");
-    QFormLayout form(&dlg);
+    dlg.setWindowTitle("Settings");
+    QVBoxLayout root(&dlg);
+    QTabWidget tabs(&dlg);
+    QWidget serverTab(&dlg);
+    QWidget audioTab(&dlg);
 
-    QComboBox *inputDevices = new QComboBox(&dlg);
-    QComboBox *outputDevices = new QComboBox(&dlg);
+    // Server tab
+    QFormLayout serverForm(&serverTab);
+    QLineEdit *hostEdit = new QLineEdit(hostValue, &serverTab);
+    QLineEdit *portEdit = new QLineEdit(QString::number(portValue), &serverTab);
+    serverForm.addRow("Server IP", hostEdit);
+    serverForm.addRow("Server Port", portEdit);
+    serverTab.setLayout(&serverForm);
+
+    // Audio tab
+    QFormLayout audioForm(&audioTab);
+    QComboBox *inputDevices = new QComboBox(&audioTab);
+    QComboBox *outputDevices = new QComboBox(&audioTab);
     for (const QAudioDevice &dev : QMediaDevices::audioInputs()) {
-        inputDevices->addItem(dev.description());
+        inputDevices->addItem(dev.description(), QVariant::fromValue(dev));
     }
     for (const QAudioDevice &dev : QMediaDevices::audioOutputs()) {
-        outputDevices->addItem(dev.description());
+        outputDevices->addItem(dev.description(), QVariant::fromValue(dev));
     }
+    auto selectById = [](QComboBox *box, const QByteArray &id) {
+        if (id.isEmpty()) return;
+        for (int i = 0; i < box->count(); ++i) {
+            QAudioDevice dev = box->itemData(i).value<QAudioDevice>();
+            if (dev.id() == id) {
+                box->setCurrentIndex(i);
+                break;
+            }
+        }
+    };
     inputDevices->setCurrentIndex(0);
     outputDevices->setCurrentIndex(0);
+    selectById(inputDevices, inputDeviceId);
+    selectById(outputDevices, outputDeviceId);
 
-    QSlider *micVol = new QSlider(Qt::Horizontal, &dlg);
+    QSlider *micVol = new QSlider(Qt::Horizontal, &audioTab);
     micVol->setRange(0, 100);
-    micVol->setValue(100);
-    QSlider *outVol = new QSlider(Qt::Horizontal, &dlg);
+    micVol->setValue(static_cast<int>(micVolume * 100));
+    QSlider *outVol = new QSlider(Qt::Horizontal, &audioTab);
     outVol->setRange(0, 100);
-    outVol->setValue(100);
+    outVol->setValue(static_cast<int>(outputVolume * 100));
 
-    form.addRow("Input device", inputDevices);
-    form.addRow("Output device", outputDevices);
-    form.addRow("Mic volume", micVol);
-    form.addRow("Output volume", outVol);
+    audioForm.addRow("Input device", inputDevices);
+    audioForm.addRow("Output device", outputDevices);
+    audioForm.addRow("Mic volume", micVol);
+    audioForm.addRow("Output volume", outVol);
+    audioTab.setLayout(&audioForm);
 
+    tabs.addTab(&serverTab, "Server");
+    tabs.addTab(&audioTab, "Audio");
+
+    root.addWidget(&tabs);
     QDialogButtonBox buttons(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
-    form.addRow(&buttons);
+    root.addWidget(&buttons);
     connect(&buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
     connect(&buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
 
     if (dlg.exec() == QDialog::Accepted) {
-        voice.setInputVolume(micVol->value() / 100.0);
-        voice.setOutputVolume(outVol->value() / 100.0);
-        voice.setVolumes(micVol->value() / 100.0, outVol->value() / 100.0);
-        // Note: switching devices would require recreating QAudioSource/QAudioSink with selected dev.
+        const QString newHost = hostEdit->text().trimmed();
+        if (!newHost.isEmpty()) hostValue = newHost;
+        portValue = static_cast<quint16>(portEdit->text().toUShort());
+
+        micVolume = micVol->value() / 100.0;
+        outputVolume = outVol->value() / 100.0;
+        voice.setInputVolume(micVolume);
+        voice.setOutputVolume(outputVolume);
+        voice.setVolumes(micVolume, outputVolume);
+
+        QAudioDevice inDev = inputDevices->currentData().value<QAudioDevice>();
+        QAudioDevice outDev = outputDevices->currentData().value<QAudioDevice>();
+        inputDeviceId = inDev.id();
+        outputDeviceId = outDev.id();
+        voice.setInputDevice(inDev);
+        voice.setOutputDevice(outDev);
+        savePersistentConfig();
     }
 }
 
-
-bool ChatWindow::showLoginDialog(const QString &error) {
-    QDialog dlg(this);
-    dlg.setWindowTitle("Login / Register");
-    dlg.setWindowFlag(Qt::Window, true);
-    dlg.setWindowModality(Qt::ApplicationModal);
-    auto user = new QLineEdit(userValue, &dlg);
-    auto pass = new QLineEdit(passValue, &dlg);
-    pass->setEchoMode(QLineEdit::Password);
-    auto host = new QLineEdit(hostValue, &dlg);
-    auto port = new QLineEdit(QString::number(portValue), &dlg);
-    QLabel *errorLabel = new QLabel(error, &dlg);
-    errorLabel->setStyleSheet("color:red");
-    auto buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
-    auto layout = new QFormLayout(&dlg);
-    layout->addRow(errorLabel);
-    layout->addRow("Host", host);
-    layout->addRow("Port", port);
-    layout->addRow("User", user);
-    layout->addRow("Password", pass);
-    layout->addWidget(buttons);
-    QObject::connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-    QObject::connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-    dlg.show();
-    dlg.raise();
-    dlg.activateWindow();
-    if (dlg.exec() != QDialog::Accepted) {
-        return false;
-    }
-
-    hostValue = host->text();
-    portValue = static_cast<quint16>(port->text().toUShort());
-    userValue = user->text();
-    passValue = pass->text();
-    return true;
-}
 
 bool ChatWindow::openShareDialog(int &fpsOut, QSize &resolutionOut, int &qualityOut) {
     QDialog dlg(this);
@@ -614,14 +755,17 @@ void ChatWindow::startConnection() {
     loggedIn = false;
     setLoggedInUi(false);
     chatView->clear();
-    watchButton->setText("Watch");
     watchingRemote = false;
-    streamSelector->setCurrentIndex(0);
+    currentStreamUser.clear();
     sharePreview->setText("Screen preview");
-    hide();
+    streamVolumeLabel->setVisible(false);
+    streamVolumeSlider->setVisible(false);
+    mainPanel->setVisible(false);
+    updateLoginStatus("Connecting...", "orange");
 
     buffer.clear();
     socket.disconnectFromHost();
+    // qDebug() << "Connecting to" << hostValue << ":" << portValue;
     socket.connectToHost(hostValue, portValue);
 }
 
@@ -629,7 +773,12 @@ void ChatWindow::setLoggedInUi(bool enabled) {
     sendButton->setEnabled(enabled);
     micToggleButton->setEnabled(enabled);
     shareToggleButton->setEnabled(enabled);
-    watchButton->setEnabled(enabled);
+    messageEdit->setEnabled(enabled);
+    settingsButton->setEnabled(enabled);
+    logoutButton->setEnabled(true); // allow reconnect
+    mainPanel->setVisible(enabled);
+    if (loginPanel) loginPanel->setVisible(!enabled);
+    loginStatusLabel->setVisible(!enabled && !loginStatusLabel->text().isEmpty());
 }
 
 void ChatWindow::requestUsersList() {
@@ -669,4 +818,119 @@ void ChatWindow::updateConnectionStatus() {
     }
     connectionLabel->setText(text);
     connectionLabel->setStyleSheet(QStringLiteral("color:%1").arg(color));
+    if (loginConnectionLabel) {
+        loginConnectionLabel->setText(text);
+        loginConnectionLabel->setStyleSheet(QStringLiteral("color:%1").arg(color));
+    }
+    const bool connected = socket.state() == QAbstractSocket::ConnectedState;
+    pingLabel->setVisible(connected);
+    if (!connected) {
+        pingLabel->setText("Ping: n/a");
+        pingLabel->setStyleSheet("color: gray");
+    }
+}
+
+void ChatWindow::updatePing() {
+    if (socket.state() != QAbstractSocket::ConnectedState) {
+        pingLabel->setVisible(false);
+        return;
+    }
+    pingLabel->setVisible(true);
+    auto process = new QProcess(this);
+    connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this, [this, process](int, QProcess::ExitStatus) {
+        const QString output = QString::fromLocal8Bit(process->readAllStandardOutput());
+        process->deleteLater();
+        QRegularExpression re("time[=<]\\s*(\\d+)ms", QRegularExpression::CaseInsensitiveOption);
+        QRegularExpressionMatch match = re.match(output);
+        if (socket.state() != QAbstractSocket::ConnectedState) {
+            pingLabel->setText("Ping: n/a");
+            pingLabel->setStyleSheet("color: gray");
+            return;
+        }
+        if (match.hasMatch()) {
+            pingLabel->setText(QStringLiteral("Ping: %1 ms").arg(match.captured(1)));
+            pingLabel->setStyleSheet("color: green");
+        } else {
+            pingLabel->setText("Ping: n/a");
+            pingLabel->setStyleSheet("color: red");
+        }
+    });
+    process->start("ping", {"-n", "1", hostValue});
+}
+
+void ChatWindow::updateMicButtonState(bool on) {
+    micToggleButton->setChecked(on);
+    micToggleButton->setIcon(QIcon(on ? ":/icons/icons/mic-on.svg" : ":/icons/icons/mic-off.svg"));
+    micToggleButton->setStyleSheet(on ? "background-color:#4caf50;color:white;" : "background-color:#444;color:#ccc;");
+}
+
+void ChatWindow::updateShareButtonState(bool on) {
+    shareToggleButton->setChecked(on);
+    shareToggleButton->setStyleSheet(on ? "background-color:#4caf50;color:white;" : "background-color:#444;color:#ccc;");
+    shareToggleButton->setIcon(QIcon(":/icons/icons/screen-sharing.svg"));
+}
+
+void ChatWindow::onMuteToggle() {
+    micMuted = muteButton->isChecked();
+    updateMuteButtonState(micMuted);
+    voice.setPlaybackEnabled(!micMuted);
+    if (micMuted && micOn) {
+        voice.stopVoiceTransmission();
+        micOn = false;
+        updateMicButtonState(false);
+    }
+}
+
+void ChatWindow::updateMuteButtonState(bool on) {
+    muteButton->setChecked(on);
+    muteButton->setIcon(QIcon(on ? ":/icons/icons/sound-off.svg" : ":/icons/icons/sound.svg"));
+    muteButton->setStyleSheet(on ? "background-color:#d32f2f;color:white;" : "background-color:#444;color:#ccc;");
+}
+
+void ChatWindow::updateLoginStatus(const QString &text, const QString &color) {
+    loginStatusLabel->setText(text);
+    loginStatusLabel->setStyleSheet(QStringLiteral("color:%1").arg(color));
+    loginStatusLabel->setVisible(!text.isEmpty());
+}
+
+void ChatWindow::loadPersistentConfig() {
+    const QString settingsPath = QDir(QCoreApplication::applicationDirPath()).filePath("settings.ini");
+    QSettings settings(settingsPath, QSettings::IniFormat);
+    const QString defaultHost = "213.171.26.107";
+    hostValue = settings.value("network/host", defaultHost).toString();
+    portValue = static_cast<quint16>(settings.value("network/port", portValue).toUInt());
+    userValue = settings.value("auth/user", userValue).toString();
+    passValue = settings.value("auth/pass", passValue).toString();
+
+    shareFps = settings.value("share/fps", shareFps).toInt();
+    const int resW = settings.value("share/resW", shareResolution.width()).toInt();
+    const int resH = settings.value("share/resH", shareResolution.height()).toInt();
+    shareResolution = QSize(resW, resH);
+    shareQuality = settings.value("share/quality", shareQuality).toInt();
+
+    micVolume = settings.value("audio/micVolume", micVolume).toDouble();
+    outputVolume = settings.value("audio/outputVolume", outputVolume).toDouble();
+    micVolume = std::clamp(micVolume, 0.0, 1.0);
+    outputVolume = std::clamp(outputVolume, 0.0, 1.0);
+    inputDeviceId = settings.value("audio/inputId").toByteArray();
+    outputDeviceId = settings.value("audio/outputId").toByteArray();
+}
+
+void ChatWindow::savePersistentConfig() {
+    const QString settingsPath = QDir(QCoreApplication::applicationDirPath()).filePath("settings.ini");
+    QSettings settings(settingsPath, QSettings::IniFormat);
+    settings.setValue("network/host", hostValue);
+    settings.setValue("network/port", portValue);
+    settings.setValue("auth/user", userValue);
+    settings.setValue("auth/pass", passValue);
+
+    settings.setValue("share/fps", shareFps);
+    settings.setValue("share/resW", shareResolution.width());
+    settings.setValue("share/resH", shareResolution.height());
+    settings.setValue("share/quality", shareQuality);
+
+    settings.setValue("audio/micVolume", micVolume);
+    settings.setValue("audio/outputVolume", outputVolume);
+    settings.setValue("audio/inputId", inputDeviceId);
+    settings.setValue("audio/outputId", outputDeviceId);
 }

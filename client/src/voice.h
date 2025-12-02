@@ -22,6 +22,8 @@ public:
     void setPlaybackEnabled(bool enabled) { playbackEnabled = enabled; }
     void setInputVolume(qreal volume);  // 0.0 - 1.0
     void setOutputVolume(qreal volume); // 0.0 - 1.0
+    void setInputDevice(const QAudioDevice &device);
+    void setOutputDevice(const QAudioDevice &device);
     bool isCapturing() const { return audioSource && audioSource->state() == QAudio::ActiveState; }
     QAudioFormat audioFormat() const { return format; }
     void setVolumes(qreal inVol, qreal outVol) { inputVolume = inVol; outputVolume = outVol; }
@@ -43,6 +45,8 @@ private:
     bool playbackEnabled = true;
     qreal inputVolume = 1.0;
     qreal outputVolume = 1.0;
+    QAudioDevice inputDev = QMediaDevices::defaultAudioInput();
+    QAudioDevice outputDev = QMediaDevices::defaultAudioOutput();
 };
 
 #endif // VOICE_H

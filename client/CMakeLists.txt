@@ -4,6 +4,7 @@ project(QtClientServerApp)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
 
 # Include directories
 include_directories(src)
@@ -31,7 +32,8 @@ set(HEADERS
 )
 
 # Create the executable
-add_executable(client ${SOURCES} ${HEADERS})
+add_executable(client ${SOURCES} ${HEADERS}
+    resources.qrc)
 
 # Link against Qt libraries
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network Multimedia)
