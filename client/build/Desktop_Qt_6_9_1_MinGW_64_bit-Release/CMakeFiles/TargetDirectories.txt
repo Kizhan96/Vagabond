@@ -1,5 +1,0 @@
-C:/Users/zabiv/Documents/DiscordAnalogueNEW/qt-client-server-app/client/build/Desktop_Qt_6_9_1_MinGW_64_bit-Release/CMakeFiles/client.dir
-C:/Users/zabiv/Documents/DiscordAnalogueNEW/qt-client-server-app/client/build/Desktop_Qt_6_9_1_MinGW_64_bit-Release/CMakeFiles/edit_cache.dir
-C:/Users/zabiv/Documents/DiscordAnalogueNEW/qt-client-server-app/client/build/Desktop_Qt_6_9_1_MinGW_64_bit-Release/CMakeFiles/rebuild_cache.dir
-C:/Users/zabiv/Documents/DiscordAnalogueNEW/qt-client-server-app/client/build/Desktop_Qt_6_9_1_MinGW_64_bit-Release/CMakeFiles/client_autogen_timestamp_deps.dir
-C:/Users/zabiv/Documents/DiscordAnalogueNEW/qt-client-server-app/client/build/Desktop_Qt_6_9_1_MinGW_64_bit-Release/CMakeFiles/client_autogen.dir
