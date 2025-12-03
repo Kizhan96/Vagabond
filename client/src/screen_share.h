@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QPixmap>
 #include <QTimer>
+#include "dxgi_capture.h"
 
 class ScreenShare : public QObject {
     Q_OBJECT
@@ -14,6 +15,7 @@ public:
     void stopCapturing();
     bool isCapturing() const { return timer.isActive(); }
     void setFps(int fps);
+    void setTargetSize(const QSize &size);
 
 signals:
     void frameReady(const QPixmap &frame);
@@ -26,6 +28,8 @@ private slots:
 private:
     QTimer timer;
     int intervalMs = 200;
+    DxgiCapture dxgi;
+    bool dxgiReady = false;
 };
 
 #endif // SCREEN_SHARE_H

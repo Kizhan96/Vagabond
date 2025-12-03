@@ -90,6 +90,9 @@ private:
         case MessageType::ScreenFrame:
             handleScreenFrame(socket, msg);
             break;
+        case MessageType::StreamAudio:
+            handleStreamAudio(socket, msg);
+            break;
         case MessageType::LogoutRequest:
             handleLogout(socket);
             break;
@@ -212,6 +215,23 @@ private:
     }
 
     void handleScreenFrame(QTcpSocket *socket, const Message &msg) {
+        const QString sender = userBySocket.value(socket);
+        if (sender.isEmpty()) {
+            sendError(socket, "Not authenticated");
+            return;
+        }
+        Message outbound = msg;
+        outbound.sender = sender;
+        outbound.timestampMs = QDateTime::currentMSecsSinceEpoch();
+        const QByteArray encoded = MessageProtocol::encodeMessage(outbound);
+        for (QTcpSocket *sock : sockets) {
+            if (sock && sock->state() == QAbstractSocket::ConnectedState && sock != socket) {
+                sock->write(encoded);
+            }
+        }
+    }
+
+    void handleStreamAudio(QTcpSocket *socket, const Message &msg) {
         const QString sender = userBySocket.value(socket);
         if (sender.isEmpty()) {
             sendError(socket, "Not authenticated");

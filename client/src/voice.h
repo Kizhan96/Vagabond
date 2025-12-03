@@ -24,6 +24,8 @@ public:
     void setOutputVolume(qreal volume); // 0.0 - 1.0
     void setInputDevice(const QAudioDevice &device);
     void setOutputDevice(const QAudioDevice &device);
+    bool restartInput();
+    bool restartOutput();
     bool isCapturing() const { return audioSource && audioSource->state() == QAudio::ActiveState; }
     QAudioFormat audioFormat() const { return format; }
     void setVolumes(qreal inVol, qreal outVol) { inputVolume = inVol; outputVolume = outVol; }

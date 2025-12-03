@@ -16,6 +16,7 @@ enum class MessageType : quint8 {
     UsersListRequest = 8,
     UsersListResponse = 9,
     ScreenFrame = 10,
+    StreamAudio = 11,
     Error = 255
 };
 

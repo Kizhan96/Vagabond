@@ -9,7 +9,14 @@
 #include "chat.h"
 #include "voice.h"
 #include "screen_share.h"
+#include "video_view.h"
+#include "frame_encode_worker.h"
+#include "h264_encoder.h"
+#include "h264_decoder.h"
 #include <QMap>
+#include <QImage>
+#include <QMediaDevices>
+#include <QThread>
 
 class QLineEdit;
 class QPushButton;
@@ -24,11 +31,15 @@ class QMenu;
 class QTimer;
 class QListWidgetItem;
 class QSlider;
+class QAudioSource;
+class QAudioSink;
+class QIODevice;
 
 class ChatWindow : public QWidget {
     Q_OBJECT
 public:
     explicit ChatWindow(QWidget *parent = nullptr);
+    ~ChatWindow() override;
 
 private slots:
     void onConnectClicked();
@@ -44,6 +55,7 @@ private slots:
     void onScreenShareStart();
     void onScreenShareStop();
     void onFrameReady(const QPixmap &frame);
+    void onEncodedFrame(const QByteArray &data, quint32 frameId, qint64 timestampMs);
     void onFullscreenToggle();
     void onLogout();
     void onOpenSettings();
@@ -68,6 +80,12 @@ private:
     void updateMicButtonState(bool on);
     void updateShareButtonState(bool on);
     void updateMuteButtonState(bool on);
+    void handleAudioDevicesChanged(bool inputsChanged);
+    void scrollChatToBottom();
+    int calcShareBitrate() const;
+    void startStreamAudioCapture();
+    void stopStreamAudioCapture();
+    void ensureStreamAudioOutput();
 
     QLineEdit *messageEdit;
     QPushButton *sendButton;
@@ -85,7 +103,7 @@ private:
     QWidget *loginPanel = nullptr;
     QWidget *mainPanel = nullptr;
     QListWidget *userList;
-    QLabel *sharePreview;
+    VideoView *sharePreview;
     QSlider *streamVolumeSlider = nullptr;
     QLabel *streamVolumeLabel = nullptr;
     QLabel *userLabel;
@@ -117,11 +135,32 @@ private:
     bool micMuted = false;
     QString currentStreamUser;
     bool isLocalSharingPreviewVisible = false;
-
+    qint64 lastFrameTimestamp = 0;
+    quint32 lastFrameIdSent = 0;
+    QMap<QString, quint32> lastFrameIdReceived;
+    bool streamConfigSent = false;
+    bool decoderReady = false;
+    bool encodingInProgress = false;
+    bool hasPendingFrame = false;
+    QImage pendingFrame;
+    quint32 pendingFrameId = 0;
+    qint64 pendingFrameTimestamp = 0;
+    H264Encoder h264Encoder;
+    H264Decoder h264Decoder;
+    FrameEncodeWorker *encoderWorker = nullptr;
+    QThread encoderThread;
     void updateUserListDisplay();
     QTimer *connectionTimer = nullptr;
     QTimer *pingTimer = nullptr;
     void updatePing();
+
+    QMediaDevices mediaDevices;
+    // Stream audio (system/loopback) mini-RTP-like
+    QAudioSource *streamAudioInput = nullptr;
+    QIODevice *streamAudioInputDevice = nullptr;
+    QAudioSink *streamAudioOutput = nullptr;
+    QIODevice *streamAudioOutputDevice = nullptr;
+    quint32 streamAudioSeq = 0;
 };
 
 #endif // WINDOW_H

@@ -5,12 +5,21 @@
 
 ScreenShare::ScreenShare(QObject *parent) : QObject(parent) {
     connect(&timer, &QTimer::timeout, this, &ScreenShare::captureFrame);
+    timer.setTimerType(Qt::PreciseTimer);
+    dxgiReady = dxgi.initialize();
 }
 
 void ScreenShare::startCapturing(int intervalMs) {
     if (timer.isActive()) return;
     intervalMs = qMax(33, intervalMs); // cap at ~30fps max speed
     this->intervalMs = intervalMs;
+    if (!dxgiReady) {
+        dxgiReady = dxgi.initialize();
+        if (!dxgiReady) {
+            emit stopped();
+            return;
+        }
+    }
     timer.start(this->intervalMs);
     emit started();
 }
@@ -22,10 +31,24 @@ void ScreenShare::stopCapturing() {
 }
 
 void ScreenShare::captureFrame() {
-    QScreen *screen = QGuiApplication::primaryScreen();
-    if (!screen) return;
-    const QPixmap frame = screen->grabWindow(0);
-    emit frameReady(frame);
+    if (!dxgiReady) {
+        dxgiReady = dxgi.initialize();
+    }
+    QImage img;
+    if (dxgiReady) {
+        img = dxgi.grab();
+        if (img.isNull()) {
+            dxgiReady = false;
+        }
+    }
+    if (img.isNull()) {
+        // fallback to Qt grab to avoid black screen
+        QScreen *screen = QGuiApplication::primaryScreen();
+        if (!screen) return;
+        emit frameReady(screen->grabWindow(0));
+    } else {
+        emit frameReady(QPixmap::fromImage(img));
+    }
 }
 
 void ScreenShare::setFps(int fps) {
@@ -33,5 +56,11 @@ void ScreenShare::setFps(int fps) {
     intervalMs = qMax(10, 1000 / fps);
     if (timer.isActive()) {
         timer.start(intervalMs);
+    }
+}
+
+void ScreenShare::setTargetSize(const QSize &size) {
+    if (size.isValid()) {
+        dxgi.resize(size.width(), size.height());
     }
 }

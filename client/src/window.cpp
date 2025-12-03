@@ -31,14 +31,18 @@
 #include <QSettings>
 #include <QDir>
 #include <QCoreApplication>
-#include <QAudioFormat>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QIcon>
+#include <QTabWidget>
+#include <QAudioFormat>
+#include <QAudioSource>
+#include <QAudioSink>
 #include <algorithm>
 
 #include "message_protocol.h"
 #include "types.h"
+#include "video_view.h"
 
 ChatWindow::ChatWindow(QWidget *parent) : QWidget(parent) {
     hostValue = "213.171.26.107"; // default server IP
@@ -87,11 +91,10 @@ ChatWindow::ChatWindow(QWidget *parent) : QWidget(parent) {
     chatView = new QTextEdit(this);
     chatView->setReadOnly(true);
     messageEdit = new QLineEdit(this);
-    sharePreview = new QLabel(this);
-    sharePreview->setMinimumHeight(160);
-    sharePreview->setAlignment(Qt::AlignCenter);
-    sharePreview->setStyleSheet("background:#222; color:#ccc;");
-    sharePreview->setText("Screen preview");
+    sharePreview = new VideoView(this);
+    sharePreview->setMinimumSize(320, 180);
+    sharePreview->setPlaceholder("Screen preview");
+    sharePreview->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     userList = new QListWidget(this);
     userList->setMinimumWidth(160);
     userList->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -113,6 +116,19 @@ ChatWindow::ChatWindow(QWidget *parent) : QWidget(parent) {
     updateMicButtonState(false);
     updateShareButtonState(false);
     updateMuteButtonState(false);
+
+    // encoder thread
+    encoderWorker = new FrameEncodeWorker();
+    encoderWorker->moveToThread(&encoderThread);
+    connect(&encoderThread, &QThread::finished, encoderWorker, &QObject::deleteLater);
+    connect(encoderWorker, &FrameEncodeWorker::encodedFrameReady, this, &ChatWindow::onEncodedFrame, Qt::QueuedConnection);
+    encoderThread.start();
+    encoderWorker->setEncoder(&h264Encoder);
+    h264Encoder.init(shareResolution.width(), shareResolution.height(), shareFps, calcShareBitrate());
+    decoderReady = h264Decoder.init();
+
+    screenShare.setTargetSize(shareResolution);
+    screenShare.setFps(shareFps);
 
     auto loginLayout = new QHBoxLayout();
     loginLayout->addWidget(loginConnectionLabel);
@@ -150,7 +166,6 @@ ChatWindow::ChatWindow(QWidget *parent) : QWidget(parent) {
     mainLayout->addLayout(leftColumn, /*stretch*/1);
 
     auto rightColumn = new QVBoxLayout();
-    sharePreview->setMinimumHeight(200);
     sharePreview->setVisible(false);
     streamVolumeLabel = new QLabel("Stream volume", this);
     streamVolumeSlider = new QSlider(Qt::Horizontal, this);
@@ -158,14 +173,14 @@ ChatWindow::ChatWindow(QWidget *parent) : QWidget(parent) {
     streamVolumeSlider->setValue(static_cast<int>(outputVolume * 100));
     streamVolumeLabel->setVisible(false);
     streamVolumeSlider->setVisible(false);
-    rightColumn->addWidget(sharePreview, /*stretch*/3);
+    rightColumn->addWidget(sharePreview, /*stretch*/4);
     auto streamVolLayout = new QHBoxLayout();
     streamVolLayout->addWidget(streamVolumeLabel);
     streamVolLayout->addWidget(streamVolumeSlider);
     rightColumn->addLayout(streamVolLayout);
     rightColumn->addWidget(chatView, /*stretch*/2);
     rightColumn->addLayout(bottomLayout);
-    mainLayout->addLayout(rightColumn, /*stretch*/4);
+    mainLayout->addLayout(rightColumn, /*stretch*/3);
 
     auto outer = new QVBoxLayout();
     outer->addLayout(topLayout);
@@ -219,7 +234,14 @@ ChatWindow::ChatWindow(QWidget *parent) : QWidget(parent) {
         onOutputVolume(value);
     });
     connect(muteButton, &QPushButton::clicked, this, &ChatWindow::onMuteToggle);
+    connect(&mediaDevices, &QMediaDevices::audioInputsChanged, this, [this]() {
+        handleAudioDevicesChanged(true);
+    });
+    connect(&mediaDevices, &QMediaDevices::audioOutputsChanged, this, [this]() {
+        handleAudioDevicesChanged(false);
+    });
     voice.setPlaybackEnabled(true);
+    // stream audio sink will be created lazily when needed
     loadPersistentConfig();
     loginUserEdit->setText(userValue);
     loginPassEdit->setText(passValue);
@@ -248,7 +270,7 @@ ChatWindow::ChatWindow(QWidget *parent) : QWidget(parent) {
             currentStreamUser = text;
             watchingRemote = true;
             if (streamFrames.contains(text)) {
-                sharePreview->setPixmap(streamFrames[text].scaled(sharePreview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                sharePreview->setFrame(streamFrames[text]);
                 sharePreview->setVisible(true);
             }
             streamVolumeLabel->setVisible(true);
@@ -278,10 +300,20 @@ ChatWindow::ChatWindow(QWidget *parent) : QWidget(parent) {
         loginPassEdit->setText(passValue);
         startConnection();
     }
+
+    // prepare stream audio output sink lazily when we first play stream audio
+}
+
+ChatWindow::~ChatWindow() {
+    if (encoderThread.isRunning()) {
+        encoderThread.quit();
+        encoderThread.wait(500);
+    }
 }
 
 void ChatWindow::appendLog(const QString &text) {
     chatView->append(text);
+    scrollChatToBottom();
 }
 
 void ChatWindow::onConnectClicked() {
@@ -401,6 +433,7 @@ void ChatWindow::onSocketReadyRead() {
             for (const auto &line : lines) {
                 chatView->append(line);
             }
+            scrollChatToBottom();
             continue;
         }
     if (msg.type == MessageType::UsersListResponse) {
@@ -418,11 +451,22 @@ void ChatWindow::onSocketReadyRead() {
             }
             continue;
         }
+        if (msg.type == MessageType::StreamAudio) {
+            ensureStreamAudioOutput();
+            if (streamAudioOutputDevice) {
+                // payload: seq (u32 big endian) + ts (qint64 big endian) + PCM data
+                if (msg.payload.size() > static_cast<int>(sizeof(quint32) + sizeof(qint64))) {
+                    QByteArray pcm = msg.payload.mid(sizeof(quint32) + sizeof(qint64));
+                    streamAudioOutputDevice->write(pcm);
+                }
+            }
+            continue;
+        }
         if (msg.type == MessageType::ScreenFrame) {
             if (msg.payload.isEmpty()) {
-                // Stream stopped
                 streamingUsers.remove(msg.sender);
                 streamFrames.remove(msg.sender);
+                lastFrameIdReceived.remove(msg.sender);
                 if (watchingRemote && currentStreamUser == msg.sender) {
                     watchingRemote = false;
                     currentStreamUser.clear();
@@ -432,23 +476,37 @@ void ChatWindow::onSocketReadyRead() {
                     streamVolumeSlider->setVisible(false);
                 }
                 updateUserListDisplay();
-            } else {
-                QBuffer imgBuf(const_cast<QByteArray *>(&msg.payload));
-                imgBuf.open(QIODevice::ReadOnly);
-                QImageReader reader(&imgBuf, "JPG");
-                const QImage image = reader.read();
-                if (!image.isNull()) {
-                    QPixmap pix = QPixmap::fromImage(image);
-                    streamFrames[msg.sender] = pix;
-                    streamingUsers.insert(msg.sender);
-                    if (watchingRemote && currentStreamUser == msg.sender) {
-                        sharePreview->setPixmap(pix.scaled(sharePreview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
-                        sharePreview->setVisible(true);
-                        streamVolumeLabel->setVisible(true);
-                        streamVolumeSlider->setVisible(true);
-                    }
-                    updateUserListDisplay();
+                continue;
+            }
+            QDataStream ds(msg.payload);
+            ds.setByteOrder(QDataStream::BigEndian);
+            quint32 frameId = 0;
+            ds >> frameId;
+            QByteArray encoded = msg.payload.mid(static_cast<int>(sizeof(quint32)));
+            if (frameId == 0) {
+                // configuration (SPS/PPS) packet
+                h264Decoder.setConfig(encoded);
+                if (!decoderReady) decoderReady = h264Decoder.init();
+                continue;
+            }
+            quint32 &lastId = lastFrameIdReceived[msg.sender];
+            if (frameId <= lastId) {
+                continue; // stale
+            }
+            lastId = frameId;
+            if (!decoderReady) decoderReady = h264Decoder.init();
+            QImage image = decoderReady ? h264Decoder.decode(encoded) : QImage();
+            if (!image.isNull()) {
+                QPixmap pix = QPixmap::fromImage(image);
+                streamFrames[msg.sender] = pix;
+                streamingUsers.insert(msg.sender);
+                if (watchingRemote && currentStreamUser == msg.sender) {
+                    sharePreview->setFrame(pix);
+                    sharePreview->setVisible(true);
+                    streamVolumeLabel->setVisible(true);
+                    streamVolumeSlider->setVisible(true);
                 }
+                updateUserListDisplay();
             }
             continue;
         }
@@ -465,7 +523,7 @@ void ChatWindow::onMicToggle() {
         return;
     }
     if (!micOn) {
-        if (voice.startVoiceTransmission()) {
+        if (voice.restartInput()) {
             micOn = true;
             updateMicButtonState(true);
         } else {
@@ -498,7 +556,10 @@ void ChatWindow::onScreenShareStart() {
         shareToggleButton->setChecked(true);
         updateShareButtonState(true);
         screenShare.setFps(shareFps);
+        h264Encoder.init(shareResolution.width(), shareResolution.height(), shareFps, calcShareBitrate());
+        streamConfigSent = false;
         screenShare.startCapturing(1000 / shareFps);
+        startStreamAudioCapture();
     }
 }
 
@@ -506,11 +567,12 @@ void ChatWindow::onScreenShareStop() {
     if (screenShare.isCapturing()) {
         screenShare.stopCapturing();
     }
+    stopStreamAudioCapture();
     shareToggleButton->setChecked(false);
     updateShareButtonState(false);
     if (!watchingRemote) {
-        sharePreview->setPixmap(QPixmap());
-        sharePreview->setText("Screen preview");
+        sharePreview->clear();
+        sharePreview->setPlaceholder("Screen preview");
         sharePreview->setVisible(false);
         isLocalSharingPreviewVisible = false;
     }
@@ -522,6 +584,7 @@ void ChatWindow::onScreenShareStop() {
     socket.write(MessageProtocol::encodeMessage(msg));
     streamingUsers.remove(auth.currentUsername());
     streamFrames.remove(auth.currentUsername());
+    streamConfigSent = false;
     if (watchingRemote && currentStreamUser == auth.currentUsername()) {
         watchingRemote = false;
         currentStreamUser.clear();
@@ -532,29 +595,78 @@ void ChatWindow::onScreenShareStop() {
 }
 
 void ChatWindow::onFrameReady(const QPixmap &frame) {
-    if (!frame.isNull()) {
-        QPixmap pix = frame.scaled(sharePreview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
-        // local preview for own stream
-        sharePreview->setPixmap(pix);
-        sharePreview->setVisible(true);
-        isLocalSharingPreviewVisible = true;
-        if (!loggedIn) return;
-        // Send compressed frame to server
-        QImage img = frame.toImage().scaled(shareResolution, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-        QByteArray bytes;
-        QBuffer buffer(&bytes);
-        buffer.open(QIODevice::WriteOnly);
-        img.save(&buffer, "JPG", shareQuality);
+    if (frame.isNull()) return;
+    QPixmap pix = frame; // keep original size for encoding
+    // local preview for own stream (scaled in paint)
+    sharePreview->setFrame(pix);
+    sharePreview->setVisible(true);
+    isLocalSharingPreviewVisible = true;
+    if (!loggedIn) return;
+    // enqueue for encoding in worker thread
+    quint32 frameId = ++lastFrameIdSent;
+    qint64 ts = QDateTime::currentMSecsSinceEpoch();
+    if (encodingInProgress) {
+        pendingFrame = frame.toImage();
+        pendingFrameId = frameId;
+        pendingFrameTimestamp = ts;
+        hasPendingFrame = true;
+        return;
+    }
+    encodingInProgress = true;
+    QMetaObject::invokeMethod(encoderWorker, "encodeFrame", Qt::QueuedConnection,
+                              Q_ARG(QImage, frame.toImage()),
+                              Q_ARG(QSize, shareResolution),
+                              Q_ARG(int, shareQuality),
+                              Q_ARG(quint32, frameId),
+                              Q_ARG(qint64, ts));
+}
+
+void ChatWindow::onEncodedFrame(const QByteArray &data, quint32 frameId, qint64 timestampMs) {
+    const qint64 backlogLimit = 256 * 1024; // tighten backlog to reduce lag
+    if (socket.bytesToWrite() < backlogLimit && loggedIn) {
+        if (!streamConfigSent) {
+            const QByteArray cfg = h264Encoder.config();
+            if (!cfg.isEmpty()) {
+                QByteArray cfgPayload;
+                QDataStream dsCfg(&cfgPayload, QIODevice::WriteOnly);
+                dsCfg.setByteOrder(QDataStream::BigEndian);
+                dsCfg << static_cast<quint32>(0);
+                cfgPayload.append(cfg);
+                Message cfgMsg;
+                cfgMsg.type = MessageType::ScreenFrame;
+                cfgMsg.timestampMs = timestampMs;
+                cfgMsg.payload = cfgPayload;
+                socket.write(MessageProtocol::encodeMessage(cfgMsg));
+                streamConfigSent = true;
+            }
+        }
+        QByteArray payload;
+        QDataStream ds(&payload, QIODevice::WriteOnly);
+        ds.setByteOrder(QDataStream::BigEndian);
+        ds << frameId;
+        payload.append(data);
+
         Message msg;
         msg.type = MessageType::ScreenFrame;
-        msg.timestampMs = QDateTime::currentMSecsSinceEpoch();
-        msg.payload = bytes;
+        msg.timestampMs = timestampMs;
+        msg.payload = payload;
         socket.write(MessageProtocol::encodeMessage(msg));
+    }
+    encodingInProgress = false;
+    if (hasPendingFrame) {
+        hasPendingFrame = false;
+        encodingInProgress = true;
+        QMetaObject::invokeMethod(encoderWorker, "encodeFrame", Qt::QueuedConnection,
+                                  Q_ARG(QImage, pendingFrame),
+                                  Q_ARG(QSize, shareResolution),
+                                  Q_ARG(int, shareQuality),
+                                  Q_ARG(quint32, pendingFrameId),
+                                  Q_ARG(qint64, pendingFrameTimestamp));
     }
 }
 
 void ChatWindow::onFullscreenToggle() {
-    const QPixmap pix = sharePreview->pixmap(Qt::ReturnByValue);
+    const QPixmap pix = sharePreview->currentFrame();
     if (pix.isNull()) {
         return;
     }
@@ -581,6 +693,10 @@ void ChatWindow::onShareConfig() {
         shareFps = fps;
         shareResolution = res;
         shareQuality = quality;
+        screenShare.setTargetSize(shareResolution);
+        screenShare.setFps(shareFps);
+        h264Encoder.init(shareResolution.width(), shareResolution.height(), shareFps, calcShareBitrate());
+        streamConfigSent = false;
         savePersistentConfig();
         onScreenShareStart();
     }
@@ -597,9 +713,9 @@ void ChatWindow::onUserContextMenuRequested(const QPoint &pos) {
             currentStreamUser = uname;
             watchingRemote = true;
             if (streamFrames.contains(uname)) {
-                sharePreview->setPixmap(streamFrames[uname].scaled(sharePreview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                sharePreview->setFrame(streamFrames[uname]);
             } else {
-                sharePreview->setText("Waiting for frames...");
+                sharePreview->setPlaceholder("Waiting for frames...");
             }
             sharePreview->setVisible(true);
             streamVolumeLabel->setVisible(true);
@@ -615,6 +731,7 @@ void ChatWindow::onLogout() {
         socket.disconnectFromHost();
         streamFrames.clear();
         streamingUsers.clear();
+        stopStreamAudioCapture();
         updateUserListDisplay();
         updateLoginStatus("Logged out", "orange");
     } else {
@@ -625,6 +742,8 @@ void ChatWindow::onLogout() {
 void ChatWindow::onOpenSettings() {
     QDialog dlg(this);
     dlg.setWindowTitle("Settings");
+    dlg.setMinimumSize(420, 320);
+    dlg.setSizeGripEnabled(true);
     QVBoxLayout root(&dlg);
     QTabWidget tabs(&dlg);
     QWidget serverTab(&dlg);
@@ -702,6 +821,9 @@ void ChatWindow::onOpenSettings() {
         outputDeviceId = outDev.id();
         voice.setInputDevice(inDev);
         voice.setOutputDevice(outDev);
+        if (micOn && !micMuted) {
+            voice.restartInput();
+        }
         savePersistentConfig();
     }
 }
@@ -710,6 +832,8 @@ void ChatWindow::onOpenSettings() {
 bool ChatWindow::openShareDialog(int &fpsOut, QSize &resolutionOut, int &qualityOut) {
     QDialog dlg(this);
     dlg.setWindowTitle("Share Screen Settings");
+    dlg.setMinimumSize(380, 260);
+    dlg.setSizeGripEnabled(true);
     QFormLayout form(&dlg);
 
     QComboBox *fpsBox = new QComboBox(&dlg);
@@ -757,11 +881,17 @@ void ChatWindow::startConnection() {
     chatView->clear();
     watchingRemote = false;
     currentStreamUser.clear();
-    sharePreview->setText("Screen preview");
+    sharePreview->setPlaceholder("Screen preview");
     streamVolumeLabel->setVisible(false);
     streamVolumeSlider->setVisible(false);
     mainPanel->setVisible(false);
     updateLoginStatus("Connecting...", "orange");
+    lastFrameIdSent = 0;
+    lastFrameIdReceived.clear();
+    hasPendingFrame = false;
+    encodingInProgress = false;
+    streamConfigSent = false;
+    decoderReady = h264Decoder.init();
 
     buffer.clear();
     socket.disconnectFromHost();
@@ -933,4 +1063,106 @@ void ChatWindow::savePersistentConfig() {
     settings.setValue("audio/outputVolume", outputVolume);
     settings.setValue("audio/inputId", inputDeviceId);
     settings.setValue("audio/outputId", outputDeviceId);
+}
+
+int ChatWindow::calcShareBitrate() const {
+    // Simple heuristic: base bitrate per megapixel scaled by fps and quality
+    const double mpix = (shareResolution.width() * shareResolution.height()) / 1000000.0;
+    double fpsScale = std::max(1.0, shareFps / 30.0);
+    double qualityScale = 1.0;
+    if (shareQuality >= 85) qualityScale = 3.0;
+    else if (shareQuality >= 75) qualityScale = 2.2;
+    else if (shareQuality >= 60) qualityScale = 1.6;
+    else qualityScale = 1.2;
+    const double baseMbps = 1.2; // for ~1MP @30fps medium quality
+    int bitrate = static_cast<int>(baseMbps * mpix * fpsScale * qualityScale * 1000000.0);
+    return std::clamp(bitrate, 400000, 8000000);
+}
+
+void ChatWindow::scrollChatToBottom() {
+    QTextCursor cursor = chatView->textCursor();
+    cursor.movePosition(QTextCursor::End);
+    chatView->setTextCursor(cursor);
+    chatView->ensureCursorVisible();
+}
+
+void ChatWindow::startStreamAudioCapture() {
+    stopStreamAudioCapture();
+    QAudioFormat fmt;
+    fmt.setSampleRate(48000);
+    fmt.setChannelCount(2);
+    fmt.setSampleFormat(QAudioFormat::Int16);
+    QAudioDevice loopDev = QMediaDevices::defaultAudioInput();
+    streamAudioInput = new QAudioSource(loopDev, fmt, this);
+    streamAudioInput->setBufferSize(4096);
+    streamAudioInputDevice = streamAudioInput->start();
+    if (streamAudioInputDevice) {
+        connect(streamAudioInputDevice, &QIODevice::readyRead, this, [this]() {
+            if (!loggedIn || !screenShare.isCapturing()) return;
+            QByteArray pcm = streamAudioInputDevice->readAll();
+            if (pcm.isEmpty()) return;
+            QByteArray payload;
+            QDataStream ds(&payload, QIODevice::WriteOnly);
+            ds.setByteOrder(QDataStream::BigEndian);
+            ds << ++streamAudioSeq;
+            ds << QDateTime::currentMSecsSinceEpoch();
+            payload.append(pcm);
+            Message msg;
+            msg.type = MessageType::StreamAudio;
+            msg.timestampMs = QDateTime::currentMSecsSinceEpoch();
+            msg.payload = payload;
+            socket.write(MessageProtocol::encodeMessage(msg));
+        });
+    }
+}
+
+void ChatWindow::stopStreamAudioCapture() {
+    if (streamAudioInput) {
+        streamAudioInput->stop();
+        streamAudioInput->deleteLater();
+        streamAudioInput = nullptr;
+        streamAudioInputDevice = nullptr;
+    }
+    streamAudioSeq = 0;
+}
+
+void ChatWindow::ensureStreamAudioOutput() {
+    if (streamAudioOutput && streamAudioOutputDevice) return;
+    QAudioFormat fmt;
+    fmt.setSampleRate(48000);
+    fmt.setChannelCount(2);
+    fmt.setSampleFormat(QAudioFormat::Int16);
+    QAudioDevice outDev = QMediaDevices::defaultAudioOutput();
+    streamAudioOutput = new QAudioSink(outDev, fmt, this);
+    streamAudioOutput->setBufferSize(4096 * 4);
+    streamAudioOutputDevice = streamAudioOutput->start();
+}
+
+void ChatWindow::handleAudioDevicesChanged(bool inputsChanged) {
+    if (inputsChanged) {
+        // If selected input disappeared, switch to default and restart if needed
+        const QList<QAudioDevice> inputs = QMediaDevices::audioInputs();
+        auto findById = [&](const QByteArray &id) -> QAudioDevice {
+            for (const auto &d : inputs) if (d.id() == id) return d;
+            return QAudioDevice();
+        };
+        if (!inputDeviceId.isEmpty() && findById(inputDeviceId).isNull()) {
+            QAudioDevice def = QMediaDevices::defaultAudioInput();
+            inputDeviceId = def.id();
+            voice.setInputDevice(def);
+            if (micOn && !micMuted) voice.restartInput();
+        }
+    } else {
+        const QList<QAudioDevice> outputs = QMediaDevices::audioOutputs();
+        auto findById = [&](const QByteArray &id) -> QAudioDevice {
+            for (const auto &d : outputs) if (d.id() == id) return d;
+            return QAudioDevice();
+        };
+        if (!outputDeviceId.isEmpty() && findById(outputDeviceId).isNull()) {
+            QAudioDevice def = QMediaDevices::defaultAudioOutput();
+            outputDeviceId = def.id();
+            voice.setOutputDevice(def);
+            voice.restartOutput();
+        }
+    }
 }

@@ -137,3 +137,19 @@ void Voice::setOutputDevice(const QAudioDevice &device) {
         outputDevice = nullptr;
     }
 }
+
+bool Voice::restartInput() {
+    stopVoiceTransmission();
+    return startVoiceTransmission();
+}
+
+bool Voice::restartOutput() {
+    if (audioSink) {
+        audioSink->stop();
+        audioSink->deleteLater();
+        audioSink = nullptr;
+        outputDevice = nullptr;
+    }
+    // Lazy recreate on first playReceivedAudio
+    return true;
+}
