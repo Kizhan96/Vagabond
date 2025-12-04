@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.14)
 
-project(QtClientServerApp)
+project(Vagabond)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_AUTOMOC ON)
@@ -20,7 +20,6 @@ set(SOURCES
     src/window.cpp
     src/screen_share.cpp
     src/video_view.cpp
-    src/dxgi_capture.cpp
     src/frame_encode_worker.cpp
     src/h264_encoder.cpp
     src/h264_decoder.cpp
@@ -35,7 +34,6 @@ set(HEADERS
     src/window.h
     src/screen_share.h
     src/video_view.h
-    src/dxgi_capture.h
     src/frame_encode_worker.h
     src/h264_encoder.h
     src/h264_decoder.h
@@ -47,18 +45,36 @@ add_executable(client ${SOURCES} ${HEADERS}
 
 # Link against Qt libraries
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network Multimedia)
-set(FFMPEG_ROOT "C:/Users/zabiv/AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg.Shared_Microsoft.Winget.Source_8wekyb3d8bbwe/ffmpeg-8.0.1-full_build-shared")
+# FFmpeg is located at project root: ../ffmpeg-8.0.1 relative to client/
+set(FFMPEG_ROOT "${CMAKE_SOURCE_DIR}/../ffmpeg-8.0.1")
+# If that folder doesn't exist (builddir inside client), also try workspace root
+if(NOT EXISTS "${FFMPEG_ROOT}")
+    set(FFMPEG_ROOT "${CMAKE_SOURCE_DIR}/ffmpeg-8.0.1")
+endif()
 set(FFMPEG_INCLUDE_DIR "${FFMPEG_ROOT}/include")
-set(AVCODEC_LIBRARY "${FFMPEG_ROOT}/lib/avcodec.lib")
-set(AVUTIL_LIBRARY "${FFMPEG_ROOT}/lib/avutil.lib")
-set(SWSCALE_LIBRARY "${FFMPEG_ROOT}/lib/swscale.lib")
+set(FFMPEG_LIB_DIR "${FFMPEG_ROOT}/lib")
+
+set(FFMPEG_LIBS
+    "${FFMPEG_LIB_DIR}/avdevice.lib"
+    "${FFMPEG_LIB_DIR}/avformat.lib"
+    "${FFMPEG_LIB_DIR}/avcodec.lib"
+    "${FFMPEG_LIB_DIR}/swscale.lib"
+    "${FFMPEG_LIB_DIR}/swresample.lib"
+    "${FFMPEG_LIB_DIR}/avutil.lib"
+)
+
+# Always link packaged FFmpeg .lib files directly (skip DEF generation to avoid missing files).
 
 target_link_libraries(client
     Qt6::Core Qt6::Widgets Qt6::Network Qt6::Multimedia
-    d3d11 dxgi
-    ${AVCODEC_LIBRARY} ${AVUTIL_LIBRARY} ${SWSCALE_LIBRARY}
+    ${FFMPEG_LIBS}
 )
 target_include_directories(client PRIVATE ${FFMPEG_INCLUDE_DIR})
+target_link_directories(client PRIVATE ${FFMPEG_LIB_DIR})
+message(STATUS "Using FFMPEG_ROOT=${FFMPEG_ROOT}")
+message(STATUS "FFmpeg include dir: ${FFMPEG_INCLUDE_DIR}")
+message(STATUS "FFmpeg lib dir: ${FFMPEG_LIB_DIR}")
+message(STATUS "FFmpeg libs: ${FFMPEG_LIBS}")
 
 if(WIN32)
     set_target_properties(client PROPERTIES WIN32_EXECUTABLE TRUE)

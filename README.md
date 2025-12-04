@@ -1,16 +1,13 @@
-# Vagabond/Vagabond/README.md
+# Vagabond
 
-# Qt Client-Server Application
-
-This project is a client-server application built using Qt 6.9.1 with C++. It includes user authentication, voice communication, chat functionality, message history storage, and a defined message protocol.
+Vagabond is a Qt 6.9.1 C++ client-server application that provides authentication, real-time voice, chat, message history storage, and a defined message protocol.
 
 ## Features
 
-- **User Authentication**: Secure login and registration for users.
-- **Voice Communication**: Real-time voice transmission between clients.
-- **Chat Functionality**: Send and receive text messages in real-time.
-- **Message History Storage**: Access to past messages for both chat and voice.
-- **Defined Message Protocol**: A structured protocol for message encoding and decoding.
+- **Authentication**: Login and registration with basic credential handling.
+- **Voice & Chat**: Bidirectional audio and text messaging.
+- **History**: Server-side history log with client retrieval.
+- **Protocol**: Length-prefixed binary protocol with typed messages.
 
 ## Project Structure
 
@@ -30,56 +27,52 @@ Vagabond
 └── README.md
 ```
 
-## Setup Instructions
+## Setup
 
-1. **Clone the repository**:
+1. **Clone**
    ```
    git clone <repository-url>
    cd Vagabond
    ```
+2. **Build Client**
+   ```
+   cd client
+   mkdir build
+   cd build
+   cmake ..
+   cmake --build .
+   ```
+3. **Build Server**
+   ```
+   cd ../../server
+   mkdir build
+   cd build
+   cmake ..
+   cmake --build .
+   ```
 
-2. **Build the Client**:
-   - Navigate to the `client` directory.
-   - Run CMake to configure the project:
-     ```
-     mkdir build
-     cd build
-     cmake ..
-     ```
-   - Build the client application:
-     ```
-     cmake --build .
-     ```
+## Run
 
-3. **Build the Server**:
-   - Navigate to the `server` directory.
-   - Repeat the CMake configuration and build steps as done for the client.
+- **Server**: From `server/build`, run the server binary. It listens on `0.0.0.0:12345`, stores users in `users.json`, and history in `history.log` in the working directory.
+- **Client**: From `client/build`, run the client binary. Configure connection via environment variables:
+  - `APP_HOST` (default `127.0.0.1`)
+  - `APP_PORT` (default `12345`)
+  - `APP_USER` (default `demo`)
+  - `APP_PASS` (default `demo`)
+  - `APP_REGISTER` (`1` to register then login, `0` to only login`)
 
-4. **Run the Server**:
-   - Execute the server application from the build directory. It listens on TCP `0.0.0.0:12345` and stores users in `users.json`, history in `history.log`.
-
-5. **Run the Client**:
-   - Execute the client application from its build directory. GUI позволяет ввести хост/порт/логин/пароль, отправлять сообщения и загружать историю.
-   - Можно предварительно заполнить поля через переменные окружения:
-     - `APP_HOST` (default `127.0.0.1`)
-     - `APP_PORT` (default `12345`)
-     - `APP_USER` (default `demo`)
-     - `APP_PASS` (default `demo`)
-     - `APP_REGISTER` (`1` to register then login, `0` to only login)
-   - Пример:
-     ```
-     set APP_USER=alice
-     set APP_PASS=secret
-     set APP_REGISTER=1
-     ./client.exe
-     ```
-
-## Usage
-
-- After starting the server, launch the client application.
-- Users can register and log in to access chat and voice features.
-- Messages and voice data are transmitted in real-time, and users can view their message history.
+PowerShell example:
+```
+set APP_HOST=127.0.0.1
+set APP_PORT=12345
+set APP_USER=alice
+set APP_PASS=secret
+set APP_REGISTER=1
+./client.exe
+```
 
 ## Documentation
 
-For detailed documentation on the client and server implementations, refer to the respective `README.md` files in the `client` and `server` directories. The `protocol.md` file in the `protocol` directory provides an in-depth explanation of the message protocol used in this application.
+- `client/README.md` – Vagabond client notes.
+- `server/README.md` – Vagabond server notes.
+- `protocol/protocol.md` – Message protocol.

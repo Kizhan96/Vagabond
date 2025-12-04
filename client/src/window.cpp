@@ -38,11 +38,58 @@
 #include <QAudioFormat>
 #include <QAudioSource>
 #include <QAudioSink>
+#include <QWidgetAction>
 #include <algorithm>
+#include <cmath>
 
 #include "message_protocol.h"
 #include "types.h"
 #include "video_view.h"
+
+SendWorker::SendWorker(QTcpSocket *socket, QObject *parent) : QObject(parent), socket(socket) {}
+
+void SendWorker::enqueue(const QByteArray &packet) {
+    QMutexLocker lock(&mutex);
+    queue.enqueue(packet);
+    cond.wakeOne();
+}
+
+void SendWorker::enqueuePriority(const QByteArray &packet) {
+    QMutexLocker lock(&mutex);
+    queue.clear();
+    queue.prepend(packet);
+    cond.wakeOne();
+}
+
+void SendWorker::stop() {
+    {
+        QMutexLocker lock(&mutex);
+        running = false;
+        cond.wakeAll();
+    }
+}
+
+void SendWorker::processLoop() {
+    while (true) {
+        QByteArray packet;
+        {
+            QMutexLocker lock(&mutex);
+            if (!running && queue.isEmpty()) break;
+            if (queue.isEmpty()) {
+                cond.wait(&mutex);
+                continue;
+            }
+            packet = queue.dequeue();
+        }
+        if (!packet.isEmpty() && socket) {
+            QMetaObject::invokeMethod(socket, [s = socket, packet]() {
+                if (s && s->state() == QAbstractSocket::ConnectedState) {
+                    s->write(packet);
+                }
+            }, Qt::QueuedConnection);
+        }
+    }
+}
 
 ChatWindow::ChatWindow(QWidget *parent) : QWidget(parent) {
     hostValue = "213.171.26.107"; // default server IP
@@ -92,7 +139,7 @@ ChatWindow::ChatWindow(QWidget *parent) : QWidget(parent) {
     chatView->setReadOnly(true);
     messageEdit = new QLineEdit(this);
     sharePreview = new VideoView(this);
-    sharePreview->setMinimumSize(320, 180);
+    sharePreview->setMinimumSize(640, 360);
     sharePreview->setPlaceholder("Screen preview");
     sharePreview->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     userList = new QListWidget(this);
@@ -126,6 +173,13 @@ ChatWindow::ChatWindow(QWidget *parent) : QWidget(parent) {
     encoderWorker->setEncoder(&h264Encoder);
     h264Encoder.init(shareResolution.width(), shareResolution.height(), shareFps, calcShareBitrate());
     decoderReady = h264Decoder.init();
+
+    // sender thread for heavy packets (screen frames)
+    sendWorker = new SendWorker(&socket);
+    sendWorker->moveToThread(&sendThread);
+    connect(&sendThread, &QThread::started, sendWorker, &SendWorker::processLoop);
+    connect(&sendThread, &QThread::finished, sendWorker, &QObject::deleteLater);
+    sendThread.start();
 
     screenShare.setTargetSize(shareResolution);
     screenShare.setFps(shareFps);
@@ -278,7 +332,7 @@ ChatWindow::ChatWindow(QWidget *parent) : QWidget(parent) {
         }
     });
 
-    setWindowTitle("Qt Chat Client");
+    setWindowTitle("Vagabond");
     resize(1100, 700);
     mainPanel->setVisible(false);
     setLoggedInUi(false);
@@ -308,6 +362,13 @@ ChatWindow::~ChatWindow() {
     if (encoderThread.isRunning()) {
         encoderThread.quit();
         encoderThread.wait(500);
+    }
+    if (sendWorker) {
+        sendWorker->stop();
+    }
+    if (sendThread.isRunning()) {
+        sendThread.quit();
+        sendThread.wait(500);
     }
 }
 
@@ -440,17 +501,28 @@ void ChatWindow::onSocketReadyRead() {
         userList->clear();
         const QStringList users = QString::fromUtf8(msg.payload).split("\n", Qt::SkipEmptyParts);
         for (const QString &u : users) {
+            if (!userVoiceGains.contains(u)) {
+                userVoiceGains.insert(u, 1.0);
+            }
             QListWidgetItem *it = new QListWidgetItem(streamingUsers.contains(u) ? QStringLiteral("%1  [LIVE]").arg(u) : u, userList);
             it->setData(Qt::UserRole, u);
         }
         continue;
     }
-        if (msg.type == MessageType::VoiceChunk) {
-            if (msg.sender != auth.currentUsername()) {
-                voice.playReceivedAudio(msg.payload);
+    if (msg.type == MessageType::VoiceChunk) {
+        if (msg.sender != auth.currentUsername()) {
+            if (mutedUsers.contains(msg.sender)) continue;
+            const qreal gain = userVoiceGains.value(msg.sender, 1.0);
+            if (!userVoiceGains.contains(msg.sender)) {
+                userVoiceGains.insert(msg.sender, 1.0);
             }
-            continue;
+            const bool unityGain = std::abs(gain - 1.0) < 0.01;
+            const QAudioFormat fmt = voice.audioFormat();
+            const QByteArray payload = (unityGain ? msg.payload : applyVoiceGain(msg.payload, gain, fmt));
+            voice.playReceivedAudio(payload);
         }
+        continue;
+    }
         if (msg.type == MessageType::StreamAudio) {
             ensureStreamAudioOutput();
             if (streamAudioOutputDevice) {
@@ -487,6 +559,28 @@ void ChatWindow::onSocketReadyRead() {
                 // configuration (SPS/PPS) packet
                 h264Decoder.setConfig(encoded);
                 if (!decoderReady) decoderReady = h264Decoder.init();
+                continue;
+            }
+            if (frameId == 0xFFFFFFFE) {
+                // explicit stop marker
+                streamingUsers.remove(msg.sender);
+                streamFrames.remove(msg.sender);
+                lastFrameIdReceived.remove(msg.sender);
+                if (watchingRemote && currentStreamUser == msg.sender) {
+                    watchingRemote = false;
+                    currentStreamUser.clear();
+                    sharePreview->clear();
+                    sharePreview->setVisible(false);
+                    streamVolumeLabel->setVisible(false);
+                    streamVolumeSlider->setVisible(false);
+                }
+                updateUserListDisplay();
+                continue;
+            }
+            if (frameId == 0xFFFFFFFF) {
+                // presence ping to mark streamer as live
+                streamingUsers.insert(msg.sender);
+                updateUserListDisplay();
                 continue;
             }
             quint32 &lastId = lastFrameIdReceived[msg.sender];
@@ -558,8 +652,25 @@ void ChatWindow::onScreenShareStart() {
         screenShare.setFps(shareFps);
         h264Encoder.init(shareResolution.width(), shareResolution.height(), shareFps, calcShareBitrate());
         streamConfigSent = false;
+        streamPresenceSent = false;
+        framesSinceConfig = 0;
+        framesSincePresence = 0;
         screenShare.startCapturing(1000 / shareFps);
         startStreamAudioCapture();
+        if (loggedIn && sendWorker) {
+            QByteArray presencePayload;
+            QDataStream dsPres(&presencePayload, QIODevice::WriteOnly);
+            dsPres.setByteOrder(QDataStream::BigEndian);
+            dsPres << static_cast<quint32>(0xFFFFFFFF);
+            Message pres;
+            pres.type = MessageType::ScreenFrame;
+            pres.timestampMs = QDateTime::currentMSecsSinceEpoch();
+            pres.payload = presencePayload;
+            const QByteArray pktPres = MessageProtocol::encodeMessage(pres);
+            QMetaObject::invokeMethod(sendWorker, "enqueue", Qt::DirectConnection,
+                                      Q_ARG(QByteArray, pktPres));
+            streamPresenceSent = true;
+        }
     }
 }
 
@@ -576,15 +687,14 @@ void ChatWindow::onScreenShareStop() {
         sharePreview->setVisible(false);
         isLocalSharingPreviewVisible = false;
     }
-    // notify others that stream ended via empty frame
-    Message msg;
-    msg.type = MessageType::ScreenFrame;
-    msg.timestampMs = QDateTime::currentMSecsSinceEpoch();
-    msg.payload.clear();
-    socket.write(MessageProtocol::encodeMessage(msg));
+    // notify others that stream ended via empty payload and explicit stop marker (delayed)
+    sendStreamStopSignal(500);
     streamingUsers.remove(auth.currentUsername());
     streamFrames.remove(auth.currentUsername());
     streamConfigSent = false;
+    streamPresenceSent = false;
+    framesSinceConfig = 0;
+    framesSincePresence = 0;
     if (watchingRemote && currentStreamUser == auth.currentUsername()) {
         watchingRemote = false;
         currentStreamUser.clear();
@@ -595,7 +705,7 @@ void ChatWindow::onScreenShareStop() {
 }
 
 void ChatWindow::onFrameReady(const QPixmap &frame) {
-    if (frame.isNull()) return;
+    if (frame.isNull() || !screenShare.isCapturing()) return;
     QPixmap pix = frame; // keep original size for encoding
     // local preview for own stream (scaled in paint)
     sharePreview->setFrame(pix);
@@ -605,6 +715,9 @@ void ChatWindow::onFrameReady(const QPixmap &frame) {
     // enqueue for encoding in worker thread
     quint32 frameId = ++lastFrameIdSent;
     qint64 ts = QDateTime::currentMSecsSinceEpoch();
+    // mark ourselves live locally to show [LIVE] tag
+    streamingUsers.insert(auth.currentUsername());
+    updateUserListDisplay();
     if (encodingInProgress) {
         pendingFrame = frame.toImage();
         pendingFrameId = frameId;
@@ -622,9 +735,11 @@ void ChatWindow::onFrameReady(const QPixmap &frame) {
 }
 
 void ChatWindow::onEncodedFrame(const QByteArray &data, quint32 frameId, qint64 timestampMs) {
-    const qint64 backlogLimit = 256 * 1024; // tighten backlog to reduce lag
-    if (socket.bytesToWrite() < backlogLimit && loggedIn) {
-        if (!streamConfigSent) {
+    if (loggedIn) {
+        framesSinceConfig++;
+        framesSincePresence++;
+        // periodic config for late joiners
+        if (!streamConfigSent || framesSinceConfig >= configRepeatInterval) {
             const QByteArray cfg = h264Encoder.config();
             if (!cfg.isEmpty()) {
                 QByteArray cfgPayload;
@@ -636,21 +751,46 @@ void ChatWindow::onEncodedFrame(const QByteArray &data, quint32 frameId, qint64 
                 cfgMsg.type = MessageType::ScreenFrame;
                 cfgMsg.timestampMs = timestampMs;
                 cfgMsg.payload = cfgPayload;
-                socket.write(MessageProtocol::encodeMessage(cfgMsg));
+                const QByteArray pkt = MessageProtocol::encodeMessage(cfgMsg);
+                QMetaObject::invokeMethod(sendWorker, "enqueue", Qt::DirectConnection,
+                                          Q_ARG(QByteArray, pkt));
                 streamConfigSent = true;
+                framesSinceConfig = 0;
             }
         }
-        QByteArray payload;
-        QDataStream ds(&payload, QIODevice::WriteOnly);
-        ds.setByteOrder(QDataStream::BigEndian);
-        ds << frameId;
-        payload.append(data);
+        // periodic presence beacon so others mark [LIVE]
+        if (!streamPresenceSent || framesSincePresence >= configRepeatInterval) {
+            QByteArray presencePayload;
+            QDataStream dsPres(&presencePayload, QIODevice::WriteOnly);
+            dsPres.setByteOrder(QDataStream::BigEndian);
+            dsPres << static_cast<quint32>(0xFFFFFFFF);
+            Message pres;
+            pres.type = MessageType::ScreenFrame;
+            pres.timestampMs = timestampMs;
+            pres.payload = presencePayload;
+            const QByteArray pktPres = MessageProtocol::encodeMessage(pres);
+            QMetaObject::invokeMethod(sendWorker, "enqueue", Qt::DirectConnection,
+                                      Q_ARG(QByteArray, pktPres));
+            streamPresenceSent = true;
+            framesSincePresence = 0;
+        }
 
-        Message msg;
-        msg.type = MessageType::ScreenFrame;
-        msg.timestampMs = timestampMs;
-        msg.payload = payload;
-        socket.write(MessageProtocol::encodeMessage(msg));
+        const qint64 backlogLimit = 256 * 1024; // tighten backlog to reduce lag
+        if (socket.bytesToWrite() < backlogLimit) {
+            QByteArray payload;
+            QDataStream ds(&payload, QIODevice::WriteOnly);
+            ds.setByteOrder(QDataStream::BigEndian);
+            ds << frameId;
+            payload.append(data);
+
+            Message msg;
+            msg.type = MessageType::ScreenFrame;
+            msg.timestampMs = timestampMs;
+            msg.payload = payload;
+            const QByteArray pkt = MessageProtocol::encodeMessage(msg);
+            QMetaObject::invokeMethod(sendWorker, "enqueue", Qt::DirectConnection,
+                                      Q_ARG(QByteArray, pkt));
+        }
     }
     encodingInProgress = false;
     if (hasPendingFrame) {
@@ -721,6 +861,45 @@ void ChatWindow::onUserContextMenuRequested(const QPoint &pos) {
             streamVolumeLabel->setVisible(true);
             streamVolumeSlider->setVisible(true);
         });
+    }
+    if (uname != auth.currentUsername()) {
+        menu.addSeparator();
+        const bool isMuted = mutedUsers.contains(uname);
+        QAction *muteAct = menu.addAction(isMuted ? QIcon(":/icons/icons/sound-off.svg") : QIcon(":/icons/icons/sound.svg"),
+                                          isMuted ? "Unmute voice" : "Mute voice");
+        connect(muteAct, &QAction::triggered, this, [this, uname, isMuted]() {
+            if (isMuted) {
+                mutedUsers.remove(uname);
+                userVoiceGains[uname] = std::max(userVoiceGains.value(uname, 1.0), 0.01);
+            } else {
+                mutedUsers.insert(uname);
+            }
+        });
+
+        // Per-user volume slider
+        QWidgetAction *volAction = new QWidgetAction(&menu);
+        QWidget *volWidget = new QWidget(&menu);
+        auto *volLayout = new QHBoxLayout(volWidget);
+        volLayout->setContentsMargins(6, 2, 6, 2);
+        QLabel *volLabel = new QLabel("Voice vol", volWidget);
+        QSlider *volSlider = new QSlider(Qt::Horizontal, volWidget);
+        volSlider->setRange(0, 200);
+        const int currentVal = static_cast<int>(userVoiceGains.value(uname, 1.0) * 100);
+        volSlider->setValue(std::clamp(currentVal, 0, 200));
+        volLayout->addWidget(volLabel);
+        volLayout->addWidget(volSlider);
+        volWidget->setLayout(volLayout);
+        volAction->setDefaultWidget(volWidget);
+        connect(volSlider, &QSlider::valueChanged, this, [this, uname](int value) {
+            const qreal gain = std::clamp(value / 100.0, 0.0, 2.0);
+            userVoiceGains[uname] = gain;
+            if (gain == 0.0) {
+                mutedUsers.insert(uname);
+            } else {
+                mutedUsers.remove(uname);
+            }
+        });
+        menu.addAction(volAction);
     }
     menu.exec(userList->viewport()->mapToGlobal(pos));
 }
@@ -1164,5 +1343,70 @@ void ChatWindow::handleAudioDevicesChanged(bool inputsChanged) {
             voice.setOutputDevice(def);
             voice.restartOutput();
         }
+    }
+}
+
+QByteArray ChatWindow::applyVoiceGain(const QByteArray &pcm, qreal gain, const QAudioFormat &format) {
+    if (pcm.isEmpty() || std::abs(gain - 1.0) < 0.01) return pcm;
+    QByteArray out = pcm;
+    const int bps = format.bytesPerSample();
+    if (bps == 0) return pcm;
+
+    if (format.sampleFormat() == QAudioFormat::Int16) {
+        const int sampleCount = out.size() / static_cast<int>(sizeof(qint16));
+        qint16 *samples = reinterpret_cast<qint16 *>(out.data());
+        for (int i = 0; i < sampleCount; ++i) {
+            const int scaled = static_cast<int>(std::lround(samples[i] * gain));
+            samples[i] = static_cast<qint16>(std::clamp(scaled, -32768, 32767));
+        }
+    } else if (format.sampleFormat() == QAudioFormat::Float) {
+        const int sampleCount = out.size() / static_cast<int>(sizeof(float));
+        float *samples = reinterpret_cast<float *>(out.data());
+        for (int i = 0; i < sampleCount; ++i) {
+            float scaled = samples[i] * static_cast<float>(gain);
+            if (scaled > 1.0f) scaled = 1.0f;
+            if (scaled < -1.0f) scaled = -1.0f;
+            samples[i] = scaled;
+        }
+    } else {
+        // Fallback: leave unchanged for unsupported sample formats.
+        return pcm;
+    }
+    return out;
+}
+
+void ChatWindow::sendStreamStopSignal(int delayMs) {
+    if (!loggedIn) return;
+    Message msgStop;
+    msgStop.type = MessageType::ScreenFrame;
+    msgStop.timestampMs = QDateTime::currentMSecsSinceEpoch();
+    QByteArray stopPayload;
+    QDataStream dsStop(&stopPayload, QIODevice::WriteOnly);
+    dsStop.setByteOrder(QDataStream::BigEndian);
+    dsStop << static_cast<quint32>(0xFFFFFFFE);
+    msgStop.payload = stopPayload;
+    const QByteArray pktStop = MessageProtocol::encodeMessage(msgStop);
+
+    Message msgEmpty;
+    msgEmpty.type = MessageType::ScreenFrame;
+    msgEmpty.timestampMs = msgStop.timestampMs;
+    const QByteArray pktEmpty = MessageProtocol::encodeMessage(msgEmpty);
+
+    auto sendFn = [this, pktStop, pktEmpty]() {
+        if (sendWorker) {
+            QMetaObject::invokeMethod(sendWorker, "enqueuePriority", Qt::DirectConnection,
+                                      Q_ARG(QByteArray, pktStop));
+            QMetaObject::invokeMethod(sendWorker, "enqueuePriority", Qt::DirectConnection,
+                                      Q_ARG(QByteArray, pktEmpty));
+        } else {
+            socket.write(pktStop);
+            socket.write(pktEmpty);
+        }
+    };
+
+    if (delayMs > 0) {
+        QTimer::singleShot(delayMs, this, sendFn);
+    } else {
+        sendFn();
     }
 }

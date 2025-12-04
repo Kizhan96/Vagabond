@@ -31,12 +31,14 @@ private slots:
     void onNewConnection() {
         QTcpSocket *clientSocket = nextPendingConnection();
         sockets.insert(clientSocket);
+        qInfo() << "[conn] new connection from" << clientSocket->peerAddress().toString() << clientSocket->peerPort();
         connect(clientSocket, &QTcpSocket::readyRead, this, [this, clientSocket]() { onReadyRead(clientSocket); });
         connect(clientSocket, &QTcpSocket::disconnected, this, [this, clientSocket]() { onDisconnected(clientSocket); });
     }
 
 private:
     void onDisconnected(QTcpSocket *socket) {
+        qInfo() << "[conn] disconnected" << socket->peerAddress().toString() << socket->peerPort();
         sockets.remove(socket);
         buffers.remove(socket);
         userBySocket.remove(socket);
@@ -63,8 +65,15 @@ private:
 
             Message message;
             if (!MessageProtocol::decodeMessage(frame, message)) {
+                qWarning() << "[proto] decode failed, size" << frame.size();
                 sendError(socket, "Malformed message");
                 continue;
+            }
+            if (message.type != MessageType::VoiceChunk &&
+                message.type != MessageType::ScreenFrame &&
+                message.type != MessageType::StreamAudio) {
+                qInfo() << "[recv]" << static_cast<int>(message.type)
+                        << "from" << socket->peerAddress().toString() << socket->peerPort();
             }
             handleMessage(socket, message);
         }
@@ -119,14 +128,18 @@ private:
 
         bool ok = false;
         if (doRegister) {
+            qInfo() << "[auth] register attempt" << username;
             ok = auth.registerUser(username, password);
             if (!ok) {
+                qWarning() << "[auth] register failed, user exists" << username;
                 sendError(socket, "User already exists");
                 return;
             }
         } else {
+            qInfo() << "[auth] login attempt" << username;
             ok = auth.loginUser(username, password);
             if (!ok) {
+                qWarning() << "[auth] invalid credentials" << username;
                 sendError(socket, "Invalid credentials");
                 return;
             }
@@ -140,6 +153,7 @@ private:
         resp.payload = QByteArrayLiteral("ok");
         resp.timestampMs = QDateTime::currentMSecsSinceEpoch();
         socket->write(MessageProtocol::encodeMessage(resp));
+        qInfo() << "[auth] success" << username;
         broadcastUsersList();
     }
 
@@ -156,6 +170,7 @@ private:
 
         const QString text = QString::fromUtf8(outbound.payload);
         history.saveMessage(QStringLiteral("%1: %2").arg(sender, text));
+        qInfo() << "[chat]" << sender << ":" << text;
 
         const QByteArray encoded = MessageProtocol::encodeMessage(outbound);
         for (QTcpSocket *sock : sockets) {
@@ -172,6 +187,7 @@ private:
         resp.timestampMs = QDateTime::currentMSecsSinceEpoch();
         resp.payload = history.getMessages().join("\n").toUtf8();
         socket->write(MessageProtocol::encodeMessage(resp));
+        qInfo() << "[history] sent to" << userBySocket.value(socket);
     }
 
     void handleUsersList(QTcpSocket *socket) {
@@ -184,9 +200,11 @@ private:
         users.removeDuplicates();
         resp.payload = users.join("\n").toUtf8();
         socket->write(MessageProtocol::encodeMessage(resp));
+        qInfo() << "[users] list sent, count" << users.size();
     }
 
     void handleLogout(QTcpSocket *socket) {
+        qInfo() << "[auth] logout" << userBySocket.value(socket);
         userBySocket.remove(socket);
         Message resp;
         resp.type = MessageType::LogoutRequest;
@@ -255,6 +273,7 @@ private:
         resp.timestampMs = QDateTime::currentMSecsSinceEpoch();
         resp.payload = text.toUtf8();
         socket->write(MessageProtocol::encodeMessage(resp));
+        qWarning() << "[error]" << text;
     }
 
     void broadcastUsersList() {

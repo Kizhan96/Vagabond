@@ -28,6 +28,7 @@ public:
     bool restartOutput();
     bool isCapturing() const { return audioSource && audioSource->state() == QAudio::ActiveState; }
     QAudioFormat audioFormat() const { return format; }
+    void setAudioFormat(const QAudioFormat &fmt) { format = fmt; }
     void setVolumes(qreal inVol, qreal outVol) { inputVolume = inVol; outputVolume = outVol; }
 
 signals:

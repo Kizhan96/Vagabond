@@ -1,8 +1,8 @@
-# Server Application Documentation
+# Vagabond Server
 
 ## Overview
 
-The server application is designed to handle client connections, manage user authentication, facilitate chat and voice communication, and store message history. It operates as a central hub for multiple clients, ensuring secure and efficient communication.
+The Vagabond server handles client connections, manages user authentication, facilitates chat and voice communication, and stores message history. It operates as a central hub for multiple clients, ensuring secure and efficient communication.
 
 ## Features
 
@@ -15,7 +15,7 @@ The server application is designed to handle client connections, manage user aut
 ## Setup Instructions
 
 1. **Dependencies**: Ensure that you have Qt 6.9.1 (Core + Network) installed on your system.
-2. **Build the Server**:
+2. **Build the Vagabond server**:
    - Navigate to the `server` directory.
    - Run the following commands:
      ```
