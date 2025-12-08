@@ -262,6 +262,7 @@ class Server : public QTcpServer {
 public:
     Server(QObject *parent = nullptr)
         : QTcpServer(parent),
+          httpBridge(this),
           auth("users.json"),
           links("telegram_links.json"),
           bot(qEnvironmentVariable("TG_BOT_TOKEN"), &auth, &links) {
@@ -571,15 +572,7 @@ private:
             sendError(socket, "Not authenticated");
             return;
         }
-        Message outbound = msg;
-        outbound.sender = sender;
-        outbound.timestampMs = QDateTime::currentMSecsSinceEpoch();
-        const QByteArray encoded = MessageProtocol::encodeMessage(outbound);
-        for (QTcpSocket *sock : sockets) {
-            if (sock && sock->state() == QAbstractSocket::ConnectedState && sock != socket) {
-                sock->write(encoded);
-            }
-        }
+        publishWebFrame(sender, msg.payload);
     }
 
     void handleWebFrame(QTcpSocket *socket, const Message &msg) {
