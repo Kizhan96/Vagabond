@@ -262,7 +262,7 @@ class Server : public QTcpServer {
 public:
     Server(QObject *parent = nullptr)
         : QTcpServer(parent),
-          httpBridge(this),
+          httpBridge(new HttpBridge()),
           auth("users.json"),
           links("telegram_links.json"),
           bot(qEnvironmentVariable("TG_BOT_TOKEN"), &auth, &links) {
@@ -271,7 +271,6 @@ public:
         videoUdp.bind(QHostAddress::Any, kVideoUdpPort, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint);
         connect(&voiceUdp, &QUdpSocket::readyRead, this, &Server::onVoiceUdpReady);
         connect(&videoUdp, &QUdpSocket::readyRead, this, &Server::onVideoUdpReady);
-        httpBridge = new HttpBridge();
         httpBridge->moveToThread(&httpThread);
         connect(&httpThread, &QThread::finished, httpBridge, &QObject::deleteLater);
         httpThread.start();
