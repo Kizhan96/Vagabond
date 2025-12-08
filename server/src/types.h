@@ -2,6 +2,7 @@
 #define TYPES_H
 
 #include <QByteArray>
+#include <QCryptographicHash>
 #include <QDataStream>
 #include <QHash>
 #include <QIODevice>
@@ -75,7 +76,13 @@ static inline bool unpackMediaDatagram(const QByteArray &datagram, MediaHeader &
 }
 
 static inline quint32 ssrcForUser(const QString &username) {
-    return static_cast<quint32>(qHash(username));
+    const QByteArray hash = QCryptographicHash::hash(username.toUtf8(), QCryptographicHash::Sha1);
+    quint32 value = 0;
+    QDataStream ds(hash.left(4));
+    ds.setByteOrder(QDataStream::BigEndian);
+    ds >> value;
+    if (value == 0) value = 1;
+    return value;
 }
 
 #endif // TYPES_H

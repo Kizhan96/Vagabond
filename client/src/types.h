@@ -4,6 +4,7 @@
 #include <QByteArray>
 #include <QDataStream>
 #include <QDateTime>
+#include <QCryptographicHash>
 #include <QHash>
 #include <QIODevice>
 #include <QString>
@@ -71,7 +72,15 @@ static inline bool unpackMediaDatagram(const QByteArray &datagram, MediaHeader &
 }
 
 static inline quint32 ssrcForUser(const QString &username) {
-    return static_cast<quint32>(qHash(username));
+    // Use a deterministic SSRC so that server and clients agree on the
+    // identifier regardless of per-process hash randomization.
+    const QByteArray hash = QCryptographicHash::hash(username.toUtf8(), QCryptographicHash::Sha1);
+    quint32 value = 0;
+    QDataStream ds(hash.left(4));
+    ds.setByteOrder(QDataStream::BigEndian);
+    ds >> value;
+    if (value == 0) value = 1; // reserve 0 as invalid
+    return value;
 }
 
 #endif // TYPES_H
