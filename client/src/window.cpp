@@ -335,7 +335,7 @@ ChatWindow::ChatWindow(QWidget *parent) : QWidget(parent) {
     streamVolumeLabel = new QLabel("Stream volume", this);
     streamVolumeSlider = new QSlider(Qt::Horizontal, this);
     streamVolumeSlider->setRange(0, 100);
-    streamVolumeSlider->setValue(static_cast<int>(outputVolume * 100));
+    streamVolumeSlider->setValue(static_cast<int>(streamOutputVolume * 100));
     streamVolumeLabel->setVisible(false);
     streamVolumeSlider->setVisible(false);
     rightColumn->addWidget(sharePreview, /*stretch*/4);
@@ -412,9 +412,7 @@ ChatWindow::ChatWindow(QWidget *parent) : QWidget(parent) {
     connect(&voice, &Voice::playbackError, this, [this](const QString &msg) {
         QMessageBox::warning(this, "Audio playback", msg);
     });
-    connect(streamVolumeSlider, &QSlider::valueChanged, this, [this](int value) {
-        onOutputVolume(value);
-    });
+    connect(streamVolumeSlider, &QSlider::valueChanged, this, [this](int value) { onStreamVolume(value); });
     connect(muteButton, &QPushButton::clicked, this, &ChatWindow::onMuteToggle);
     connect(&mediaDevices, &QMediaDevices::audioInputsChanged, this, [this]() {
         handleAudioDevicesChanged(true);
@@ -1013,6 +1011,14 @@ void ChatWindow::onMicVolume(int value) {
 void ChatWindow::onOutputVolume(int value) {
     outputVolume = value / 100.0;
     voice.setOutputVolume(outputVolume);
+    savePersistentConfig();
+}
+
+void ChatWindow::onStreamVolume(int value) {
+    streamOutputVolume = value / 100.0;
+    if (streamAudioOutput) {
+        streamAudioOutput->setVolume(streamOutputVolume);
+    }
     savePersistentConfig();
 }
 
@@ -1623,8 +1629,10 @@ void ChatWindow::loadPersistentConfig() {
 
     micVolume = settings.value("audio/micVolume", micVolume).toDouble();
     outputVolume = settings.value("audio/outputVolume", outputVolume).toDouble();
+    streamOutputVolume = settings.value("audio/streamOutputVolume", streamOutputVolume).toDouble();
     micVolume = std::clamp(micVolume, 0.0, 1.0);
     outputVolume = std::clamp(outputVolume, 0.0, 1.0);
+    streamOutputVolume = std::clamp(streamOutputVolume, 0.0, 1.0);
     inputDeviceId = settings.value("audio/inputId").toByteArray();
     outputDeviceId = settings.value("audio/outputId").toByteArray();
 }
@@ -1644,6 +1652,7 @@ void ChatWindow::savePersistentConfig() {
 
     settings.setValue("audio/micVolume", micVolume);
     settings.setValue("audio/outputVolume", outputVolume);
+    settings.setValue("audio/streamOutputVolume", streamOutputVolume);
     settings.setValue("audio/inputId", inputDeviceId);
     settings.setValue("audio/outputId", outputDeviceId);
 }
@@ -1729,6 +1738,7 @@ void ChatWindow::ensureStreamAudioOutput() {
     QAudioDevice outDev = QMediaDevices::defaultAudioOutput();
     streamAudioOutput = new QAudioSink(outDev, fmt, this);
     streamAudioOutput->setBufferSize(4096 * 4);
+    streamAudioOutput->setVolume(streamOutputVolume);
     streamAudioOutputDevice = streamAudioOutput->start();
 }
 

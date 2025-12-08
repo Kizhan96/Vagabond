@@ -123,6 +123,7 @@ private slots:
     void updateConnectionStatus();
     void onMicVolume(int value);
     void onOutputVolume(int value);
+    void onStreamVolume(int value);
 
 private:
     void appendLog(const QString &text);
@@ -204,6 +205,7 @@ private:
     int webFrameCounter = 0;
     double micVolume = 1.0;
     double outputVolume = 1.0;
+    double streamOutputVolume = 1.0;
     QByteArray inputDeviceId;
     QByteArray outputDeviceId;
     QSet<QString> streamingUsers;

@@ -140,7 +140,7 @@ private:
         }
 
         clients[sock].kind = ClientKind::Html;
-        const QByteArray body = viewerHtml();
+        const QByteArray body = viewerHtml(path);
         QByteArray resp;
         resp.append("HTTP/1.1 200 OK\r\n");
         resp.append("Content-Type: text/html; charset=utf-8\r\n");
@@ -152,7 +152,9 @@ private:
         sock->disconnectFromHost();
     }
 
-    QByteArray viewerHtml() const {
+    QByteArray viewerHtml(const QString &path) const {
+        const QUrl url(path);
+        const QString prefillUser = QUrlQuery(url).queryItemValue(QStringLiteral("user"));
         static const QByteArray html =
             "<!doctype html><html><head><meta charset=\"utf-8\"><title>Vagabond Web Viewer</title>"
             "<style>body{margin:0;background:#111;color:#eee;font-family:sans-serif;}#wrap{display:flex;flex-direction:column;height:100vh;}"
@@ -162,7 +164,12 @@ private:
             "const u=document.getElementById('u');u.value=p.get('user')||'';const img=document.getElementById('video');const aud=document.getElementById('audio');"
             "function set(){if(!u.value)return;img.src='/mjpeg/'+encodeURIComponent(u.value);aud.src='/audio/'+encodeURIComponent(u.value);}"
             "document.getElementById('go').onclick=set;if(u.value)set();</script></body></html>";
-        return html;
+        if (prefillUser.isEmpty()) {
+            return html;
+        }
+        QByteArray patched = html;
+        patched.replace("p.get('user')||''", QStringLiteral("'%1'").arg(prefillUser).toUtf8());
+        return patched;
     }
 
     QByteArray wavHeader() const {
