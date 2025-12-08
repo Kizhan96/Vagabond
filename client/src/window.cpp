@@ -267,7 +267,6 @@ ChatWindow::ChatWindow(QWidget *parent) : QWidget(parent) {
     encoderThread.start();
     encoderWorker->setEncoder(&h264Encoder);
     h264Encoder.init(shareResolution.width(), shareResolution.height(), shareFps, calcShareBitrate());
-    decoderReady = h264Decoder.init();
 
     // sender thread for heavy packets (screen frames)
     sendWorker = new SendWorker(&socket);
@@ -393,6 +392,13 @@ ChatWindow::ChatWindow(QWidget *parent) : QWidget(parent) {
         hdr.seq = ++voiceSeq;
         const QByteArray packet = packMediaDatagram(hdr, data);
         voiceUdp.writeDatagram(packet, QHostAddress(hostValue), kVoiceUdpPort);
+
+        // Mirror voice over TCP so listeners still receive audio if UDP is blocked.
+        Message msg;
+        msg.type = MessageType::VoiceChunk;
+        msg.timestampMs = hdr.timestampMs;
+        msg.payload = data;
+        socket.write(MessageProtocol::encodeMessage(msg));
     });
     connect(&voice, &Voice::playbackError, this, [this](const QString &msg) {
         QMessageBox::warning(this, "Audio playback", msg);
@@ -1133,6 +1139,15 @@ void ChatWindow::onEncodedFrame(const QByteArray &data, quint32 frameId, qint64 
         hdr.seq = ++videoSeq;
         const QByteArray pkt = packMediaDatagram(hdr, payload);
         videoUdp.writeDatagram(pkt, QHostAddress(hostValue), kVideoUdpPort);
+
+        // Also mirror the same frame over TCP so late joiners or NATed peers still receive
+        // a reliable stream even if UDP traversal fails.
+        Message frameMsg;
+        frameMsg.type = MessageType::ScreenFrame;
+        frameMsg.timestampMs = timestampMs;
+        frameMsg.payload = payload;
+        const QByteArray tcpFrame = MessageProtocol::encodeMessage(frameMsg);
+        QMetaObject::invokeMethod(sendWorker, "enqueue", Qt::DirectConnection, Q_ARG(QByteArray, tcpFrame));
     }
     encodingInProgress = false;
     if (hasPendingFrame) {
