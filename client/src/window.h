@@ -4,6 +4,7 @@
 #include <QWidget>
 #include <QByteArray>
 #include <QTcpSocket>
+#include <QUdpSocket>
 
 #include "authentication.h"
 #include "chat.h"
@@ -112,6 +113,11 @@ private:
     void ensureStreamAudioOutput();
     void sendStreamStopSignal(int delayMs = 0);
     QByteArray applyVoiceGain(const QByteArray &pcm, qreal gain, const QAudioFormat &format);
+    void sendUdpAnnouncement();
+    void handleVoiceUdp();
+    void handleVideoUdp();
+    void processIncomingVoice(const QString &sender, const QByteArray &pcm, const QAudioFormat &fmt);
+    void handleScreenFrameMessage(const QString &sender, const QByteArray &payload);
 
     QLineEdit *messageEdit;
     QPushButton *sendButton;
@@ -141,6 +147,8 @@ private:
     Voice voice;
     ScreenShare screenShare;
     QTcpSocket socket;
+    QUdpSocket voiceUdp;
+    QUdpSocket videoUdp;
     QByteArray buffer;
     bool loggedIn = false;
     QMap<QString, QPixmap> streamFrames;
@@ -159,6 +167,7 @@ private:
     QSet<QString> streamingUsers;
     QSet<QString> mutedUsers;
     QMap<QString, qreal> userVoiceGains;
+    QHash<quint32, QString> ssrcToUser;
     bool micOn = false;
     bool micMuted = false;
     QString currentStreamUser;
@@ -181,6 +190,8 @@ private:
     H264Decoder h264Decoder;
     FrameEncodeWorker *encoderWorker = nullptr;
     QThread encoderThread;
+    quint16 voiceSeq = 0;
+    quint16 videoSeq = 0;
 
     SendWorker *sendWorker = nullptr;
     QThread sendThread;
@@ -196,6 +207,8 @@ private:
     QAudioSink *streamAudioOutput = nullptr;
     QIODevice *streamAudioOutputDevice = nullptr;
     quint32 streamAudioSeq = 0;
+    static constexpr quint16 kVoiceUdpPort = 40000;
+    static constexpr quint16 kVideoUdpPort = 40001;
 };
 
 #endif // WINDOW_H
