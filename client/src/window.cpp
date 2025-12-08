@@ -1672,9 +1672,6 @@ void ChatWindow::scrollChatToBottom() {
 QAudioDevice ChatWindow::chooseLoopbackAudio() const {
     const QList<QAudioDevice> inputs = QMediaDevices::audioInputs();
     for (const auto &dev : inputs) {
-#ifdef Q_OS_WIN
-        if (dev.isLoopback()) return dev;
-#endif
         const QString desc = dev.description().toLower();
         if (desc.contains("loopback") || desc.contains("stereo mix") || desc.contains("what u hear")) {
             return dev;
