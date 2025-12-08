@@ -299,6 +299,7 @@ private:
         buffers.remove(socket);
         const QString user = userBySocket.take(socket);
         if (!user.isEmpty()) {
+            ssrcToUser.remove(ssrcForUser(user));
             const auto ep = udpByUser.take(user);
             if (ep.voicePort) voiceEndpointToUser.remove(endpointKey(ep.address, ep.voicePort));
             if (ep.videoPort) videoEndpointToUser.remove(endpointKey(ep.address, ep.videoPort));
@@ -426,6 +427,7 @@ private:
         }
 
         userBySocket[socket] = username;
+        ssrcToUser.insert(ssrcForUser(username), username);
 
         Message resp;
         resp.type = MessageType::LoginResponse;
@@ -604,11 +606,24 @@ private:
             QHostAddress addr;
             quint16 port = 0;
             voiceUdp.readDatagram(datagram.data(), datagram.size(), &addr, &port);
-            const QString sender = voiceEndpointToUser.value(endpointKey(addr, port));
-            if (sender.isEmpty()) continue;
             MediaHeader hdr{};
             QByteArray payload;
             if (!unpackMediaDatagram(datagram, hdr, payload)) continue;
+            QString sender = voiceEndpointToUser.value(endpointKey(addr, port));
+            if (sender.isEmpty()) {
+                sender = ssrcToUser.value(hdr.ssrc);
+                if (!sender.isEmpty()) {
+                    auto ep = udpByUser.value(sender);
+                    if (ep.voicePort && ep.voicePort != port) {
+                        voiceEndpointToUser.remove(endpointKey(ep.address, ep.voicePort));
+                    }
+                    ep.address = addr;
+                    ep.voicePort = port;
+                    udpByUser.insert(sender, ep);
+                    voiceEndpointToUser.insert(endpointKey(addr, port), sender);
+                }
+            }
+            if (sender.isEmpty()) continue;
             if (hdr.mediaType != 0 && hdr.mediaType != 2) continue;
             hdr.ssrc = ssrcForUser(sender);
             const QByteArray outbound = packMediaDatagram(hdr, payload);
@@ -631,11 +646,24 @@ private:
             QHostAddress addr;
             quint16 port = 0;
             videoUdp.readDatagram(datagram.data(), datagram.size(), &addr, &port);
-            const QString sender = videoEndpointToUser.value(endpointKey(addr, port));
-            if (sender.isEmpty()) continue;
             MediaHeader hdr{};
             QByteArray payload;
             if (!unpackMediaDatagram(datagram, hdr, payload)) continue;
+            QString sender = videoEndpointToUser.value(endpointKey(addr, port));
+            if (sender.isEmpty()) {
+                sender = ssrcToUser.value(hdr.ssrc);
+                if (!sender.isEmpty()) {
+                    auto ep = udpByUser.value(sender);
+                    if (ep.videoPort && ep.videoPort != port) {
+                        videoEndpointToUser.remove(endpointKey(ep.address, ep.videoPort));
+                    }
+                    ep.address = addr;
+                    ep.videoPort = port;
+                    udpByUser.insert(sender, ep);
+                    videoEndpointToUser.insert(endpointKey(addr, port), sender);
+                }
+            }
+            if (sender.isEmpty()) continue;
             hdr.ssrc = ssrcForUser(sender);
             const QByteArray outbound = packMediaDatagram(hdr, payload);
             for (auto it = udpByUser.cbegin(); it != udpByUser.cend(); ++it) {
@@ -687,6 +715,7 @@ private:
     QHash<QString, QString> voiceEndpointToUser;
     QHash<QString, QString> videoEndpointToUser;
     QHash<QString, QSet<QString>> activeMedia;
+    QHash<quint32, QString> ssrcToUser;
     QUdpSocket voiceUdp;
     QUdpSocket videoUdp;
     static constexpr quint16 kVoiceUdpPort = 40000;
