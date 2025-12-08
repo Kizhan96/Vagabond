@@ -379,15 +379,6 @@ private:
         case MessageType::Ping:
             handlePing(socket);
             break;
-        case MessageType::WebFrame:
-            handleWebFrame(socket, msg);
-            break;
-        case MessageType::MediaControl:
-            handleMediaControl(socket, msg);
-            break;
-        case MessageType::Ping:
-            handlePing(socket);
-            break;
         case MessageType::LogoutRequest:
             handleLogout(socket);
             break;
@@ -612,6 +603,11 @@ private:
     void publishWebFrame(const QString &user, const QByteArray &jpeg) {
         if (!httpBridge) return;
         QMetaObject::invokeMethod(httpBridge, "updateFrame", Qt::QueuedConnection, Q_ARG(QString, user), Q_ARG(QByteArray, jpeg));
+    }
+
+    void publishWebAudio(const QString &user, const QByteArray &pcm) {
+        if (!httpBridge) return;
+        QMetaObject::invokeMethod(httpBridge, "pushAudio", Qt::QueuedConnection, Q_ARG(QString, user), Q_ARG(QByteArray, pcm));
     }
 
     void publishWebAudio(const QString &user, const QByteArray &pcm) {
