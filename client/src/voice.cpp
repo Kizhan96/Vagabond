@@ -211,6 +211,7 @@ void Voice::playReceivedAudio(const QByteArray &audioData) {
             audioSink->deleteLater();
         }
         audioSink = new QAudioSink(outDev, playFormat, this);
+        audioSink->setBufferSize(16384); // add headroom to smooth jittery UDP delivery
         audioSink->setVolume(outputVolume);
         outputDevice = audioSink->start();
     }

@@ -30,6 +30,7 @@ private:
     void sendMessage(qint64 chatId, const QString &text);
     void askForUsername(qint64 chatId);
     void processUsername(qint64 chatId, qint64 telegramId, const QString &username);
+    void createTestUsers(qint64 chatId, int count);
 
     QString m_token;
     QString m_apiUrl;
