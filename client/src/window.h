@@ -190,6 +190,14 @@ private:
     H264Decoder h264Decoder;
     FrameEncodeWorker *encoderWorker = nullptr;
     QThread encoderThread;
+    struct PendingVideoFrame {
+        MediaHeader header{};
+        QByteArray payload;
+    };
+    static bool isSeqNewer(quint16 current, quint16 previous) {
+        return static_cast<quint16>(current - previous) < 0x8000;
+    }
+    QHash<QString, PendingVideoFrame> latestVideoBySender;
     quint16 voiceSeq = 0;
     quint16 videoSeq = 0;
 

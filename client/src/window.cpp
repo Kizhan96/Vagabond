@@ -644,6 +644,7 @@ void ChatWindow::handleVoiceUdp() {
 }
 
 void ChatWindow::handleVideoUdp() {
+    QHash<QString, PendingVideoFrame> newest;
     while (videoUdp.hasPendingDatagrams()) {
         QByteArray datagram;
         datagram.resize(int(videoUdp.pendingDatagramSize()));
@@ -656,7 +657,16 @@ void ChatWindow::handleVideoUdp() {
         if (hdr.mediaType != 1) continue;
         const QString sender = ssrcToUser.value(hdr.ssrc);
         if (sender.isEmpty()) continue;
-        handleScreenFrameMessage(sender, payload);
+        auto it = newest.find(sender);
+        if (it == newest.end() || isSeqNewer(hdr.seq, it->header.seq)) {
+            PendingVideoFrame frame{hdr, payload};
+            newest.insert(sender, frame);
+        }
+    }
+
+    for (auto it = newest.cbegin(); it != newest.cend(); ++it) {
+        latestVideoBySender.insert(it.key(), it.value());
+        handleScreenFrameMessage(it.key(), it.value().payload);
     }
 }
 
