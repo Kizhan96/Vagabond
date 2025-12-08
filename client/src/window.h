@@ -14,6 +14,7 @@
 #include "frame_encode_worker.h"
 #include "h264_encoder.h"
 #include "h264_decoder.h"
+#include "types.h"
 #include <QMap>
 #include <QImage>
 #include <QMediaDevices>
