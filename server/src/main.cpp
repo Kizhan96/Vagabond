@@ -262,6 +262,7 @@ class Server : public QTcpServer {
 public:
     Server(QObject *parent = nullptr)
         : QTcpServer(parent),
+          httpBridge(this),
           auth("users.json"),
           links("telegram_links.json"),
           bot(qEnvironmentVariable("TG_BOT_TOKEN"), &auth, &links) {
@@ -368,6 +369,15 @@ private:
             break;
         case MessageType::ScreenFrame:
             handleScreenFrame(socket, msg);
+            break;
+        case MessageType::WebFrame:
+            handleWebFrame(socket, msg);
+            break;
+        case MessageType::MediaControl:
+            handleMediaControl(socket, msg);
+            break;
+        case MessageType::Ping:
+            handlePing(socket);
             break;
         case MessageType::WebFrame:
             handleWebFrame(socket, msg);
@@ -608,6 +618,14 @@ private:
         if (!httpBridge) return;
         QMetaObject::invokeMethod(httpBridge, "pushAudio", Qt::QueuedConnection, Q_ARG(QString, user), Q_ARG(QByteArray, pcm));
     }
+
+    void handleMediaControl(QTcpSocket *socket, const Message &msg);
+
+    void handlePing(QTcpSocket *socket);
+
+    void broadcastMediaUpdate(const QString &kind, const QString &user, const QString &state, QTcpSocket *exclude = nullptr);
+
+    void sendMediaSnapshot(QTcpSocket *socket);
 
     void sendError(QTcpSocket *socket, const QString &text) {
         Message resp;

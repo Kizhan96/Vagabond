@@ -966,6 +966,53 @@ void ChatWindow::onRemoteFrameReady(const QString &sender, const QImage &image) 
     updateUserListDisplay();
 }
 
+void ChatWindow::dispatchVideoPayload(const QString &sender, const QByteArray &payload) {
+    if (!videoWorker) return;
+    QMetaObject::invokeMethod(videoWorker, "processPayload", Qt::QueuedConnection,
+                              Q_ARG(QString, sender), Q_ARG(QByteArray, payload));
+}
+
+void ChatWindow::onRemoteStreamPresence(const QString &sender) {
+    if (sender.isEmpty()) return;
+    streamingUsers.insert(sender);
+    if (watchingRemote && currentStreamUser == sender && !streamFrames.contains(sender)) {
+        sharePreview->setPlaceholder("Waiting for frames...");
+        sharePreview->setVisible(true);
+        streamVolumeLabel->setVisible(true);
+        streamVolumeSlider->setVisible(true);
+    }
+    updateUserListDisplay();
+}
+
+void ChatWindow::onRemoteStreamStopped(const QString &sender) {
+    streamingUsers.remove(sender);
+    streamFrames.remove(sender);
+    if (watchingRemote && currentStreamUser == sender) {
+        watchingRemote = false;
+        currentStreamUser.clear();
+        sharePreview->clear();
+        sharePreview->setVisible(false);
+        streamVolumeLabel->setVisible(false);
+        streamVolumeSlider->setVisible(false);
+    }
+    updateUserListDisplay();
+}
+
+void ChatWindow::onRemoteFrameReady(const QString &sender, const QImage &image) {
+    if (sender.isEmpty() || image.isNull()) return;
+    QPixmap pix = QPixmap::fromImage(image);
+    if (pix.isNull()) return;
+    streamFrames[sender] = pix;
+    streamingUsers.insert(sender);
+    if (watchingRemote && currentStreamUser == sender) {
+        sharePreview->setFrame(pix);
+        sharePreview->setVisible(true);
+        streamVolumeLabel->setVisible(true);
+        streamVolumeSlider->setVisible(true);
+    }
+    updateUserListDisplay();
+}
+
 void ChatWindow::processIncomingVoice(const QString &sender, const QByteArray &pcm, const QAudioFormat &fmt) {
     if (sender.isEmpty() || sender == auth.currentUsername()) return;
     if (mutedUsers.contains(sender)) return;
