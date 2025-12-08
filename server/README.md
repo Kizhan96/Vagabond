@@ -9,8 +9,12 @@ The Vagabond server handles client connections, manages user authentication, fac
 - **User Authentication**: Manages user login, registration, and session management.
 - **Chat Functionality**: Allows users to send and receive text messages in real-time.
 - **Voice Relay**: Forwards voice/audio chunks between clients (no audio capture/output on server).
+- **Screen & Video Streams**: Relays screen frames and raw media datagrams with SSRC stamping for smoother client-side playback.
+- **Media Chat**: Broadcasts text or media chat messages (caption + base64-encoded payloads) to all connected users and stores concise history entries.
+- **Media Presence Signals**: Notifies clients when peers start/stop voice, video, or screen sharing and shares the current active set with newly connected clients.
 - **Message History Storage**: Stores and retrieves past messages for users.
 - **Defined Message Protocol**: Implements a structured protocol for message encoding and decoding.
+- **Browser Viewer Bridge**: Serves MJPEG video plus WAV audio for the active screen sharer at `http://<server>:8080/viewer?user=<username>` so phones can watch without the Qt client.
 
 ## Setup Instructions
 
