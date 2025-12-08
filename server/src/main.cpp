@@ -572,15 +572,7 @@ private:
             sendError(socket, "Not authenticated");
             return;
         }
-        Message outbound = msg;
-        outbound.sender = sender;
-        outbound.timestampMs = QDateTime::currentMSecsSinceEpoch();
-        const QByteArray encoded = MessageProtocol::encodeMessage(outbound);
-        for (QTcpSocket *sock : sockets) {
-            if (sock && sock->state() == QAbstractSocket::ConnectedState && sock != socket) {
-                sock->write(encoded);
-            }
-        }
+        publishWebFrame(sender, msg.payload);
     }
 
     void handleWebFrame(QTcpSocket *socket, const Message &msg) {
@@ -600,38 +592,11 @@ private:
 
     void sendMediaSnapshot(QTcpSocket *socket);
 
-    void publishWebFrame(const QString &user, const QByteArray &jpeg) {
-        if (!httpBridge) return;
-        QMetaObject::invokeMethod(httpBridge, "updateFrame", Qt::QueuedConnection, Q_ARG(QString, user), Q_ARG(QByteArray, jpeg));
-    }
+    void publishWebFrame(const QString &user, const QByteArray &jpeg);
 
-    void publishWebAudio(const QString &user, const QByteArray &pcm) {
-        if (!httpBridge) return;
-        QMetaObject::invokeMethod(httpBridge, "pushAudio", Qt::QueuedConnection, Q_ARG(QString, user), Q_ARG(QByteArray, pcm));
-    }
+    void publishWebAudio(const QString &user, const QByteArray &pcm);
 
-    void publishWebAudio(const QString &user, const QByteArray &pcm) {
-        if (!httpBridge) return;
-        QMetaObject::invokeMethod(httpBridge, "pushAudio", Qt::QueuedConnection, Q_ARG(QString, user), Q_ARG(QByteArray, pcm));
-    }
-
-    void handleMediaControl(QTcpSocket *socket, const Message &msg);
-
-    void handlePing(QTcpSocket *socket);
-
-    void broadcastMediaUpdate(const QString &kind, const QString &user, const QString &state, QTcpSocket *exclude = nullptr);
-
-    void sendMediaSnapshot(QTcpSocket *socket);
-
-    void sendError(QTcpSocket *socket, const QString &text) {
-        Message resp;
-        resp.type = MessageType::Error;
-        resp.sender = "server";
-        resp.timestampMs = QDateTime::currentMSecsSinceEpoch();
-        resp.payload = text.toUtf8();
-        socket->write(MessageProtocol::encodeMessage(resp));
-        qWarning() << "[error]" << text;
-    }
+    void sendError(QTcpSocket *socket, const QString &text);
 
     void onVoiceUdpReady() {
         while (voiceUdp.hasPendingDatagrams()) {
@@ -728,6 +693,26 @@ private:
     static constexpr quint16 kVoiceUdpPort = 40000;
     static constexpr quint16 kVideoUdpPort = 40001;
 };
+
+void Server::publishWebFrame(const QString &user, const QByteArray &jpeg) {
+    if (!httpBridge) return;
+    QMetaObject::invokeMethod(httpBridge, "updateFrame", Qt::QueuedConnection, Q_ARG(QString, user), Q_ARG(QByteArray, jpeg));
+}
+
+void Server::publishWebAudio(const QString &user, const QByteArray &pcm) {
+    if (!httpBridge) return;
+    QMetaObject::invokeMethod(httpBridge, "pushAudio", Qt::QueuedConnection, Q_ARG(QString, user), Q_ARG(QByteArray, pcm));
+}
+
+void Server::sendError(QTcpSocket *socket, const QString &text) {
+    Message resp;
+    resp.type = MessageType::Error;
+    resp.sender = "server";
+    resp.timestampMs = QDateTime::currentMSecsSinceEpoch();
+    resp.payload = text.toUtf8();
+    socket->write(MessageProtocol::encodeMessage(resp));
+    qWarning() << "[error]" << text;
+}
 
 void Server::handleMediaControl(QTcpSocket *socket, const Message &msg) {
     const QString sender = userBySocket.value(socket);
