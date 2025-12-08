@@ -71,6 +71,18 @@ set APP_REGISTER=1
 ./client.exe
 ```
 
+## Windows build & deployment tips
+
+- Prefer a **Release** build unless you have the Qt *debug* libraries installed. A debug build searches for `Qt6Widgetsd.dll` and the other `*d.dll` binaries; if you only installed the default release components, rebuild with `-DCMAKE_BUILD_TYPE=Release` to avoid the missing-debug-DLL error.
+- If you do need a debug build, install the matching *Debug* Qt libraries for your compiler (e.g., MinGW 64-bit) so the `Qt6* d.dll` files exist under `C:\Qt\6.9.1\mingw_64\bin`.
+- After building, run `windeployqt` against the produced executable to stage all Qt dependencies next to the `.exe`:
+  ```powershell
+  cd client\build
+  windeployqt .\client.exe
+  ```
+  Make sure the Qt version used by `windeployqt` matches the one you compiled with.
+- If launching from a terminal, ensure `C:\Qt\6.9.1\mingw_64\bin` (or your actual Qt path) is on `PATH` so Windows can locate the Qt DLLs.
+
 ## Documentation
 
 - `client/README.md` – Vagabond client notes.
