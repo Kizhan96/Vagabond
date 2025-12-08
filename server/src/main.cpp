@@ -697,6 +697,91 @@ private:
         socket->write(MessageProtocol::encodeMessage(resp));
     }
 
+    void handleMediaControl(QTcpSocket *socket, const Message &msg) {
+        const QString sender = userBySocket.value(socket);
+        if (sender.isEmpty()) {
+            sendError(socket, "Not authenticated");
+            return;
+        }
+
+        const QJsonDocument doc = QJsonDocument::fromJson(msg.payload);
+        if (!doc.isObject()) {
+            sendError(socket, "Invalid media control payload");
+            return;
+        }
+        const QJsonObject obj = doc.object();
+        const QString kind = obj.value("kind").toString();
+        const QString state = obj.value("state").toString();
+        if (kind.isEmpty() || (state != "start" && state != "stop")) {
+            sendError(socket, "Media control requires kind/state");
+            return;
+        }
+
+        if (state == "start") {
+            activeMedia[kind].insert(sender);
+        } else {
+            activeMedia[kind].remove(sender);
+        }
+
+        broadcastMediaUpdate(kind, sender, state, socket);
+        qInfo() << "[media]" << sender << kind << state;
+    }
+
+    void handlePing(QTcpSocket *socket) {
+        Message resp;
+        resp.type = MessageType::Pong;
+        resp.sender = "server";
+        resp.timestampMs = QDateTime::currentMSecsSinceEpoch();
+        resp.payload = QByteArrayLiteral("pong");
+        socket->write(MessageProtocol::encodeMessage(resp));
+    }
+
+    void broadcastMediaUpdate(const QString &kind, const QString &user, const QString &state, QTcpSocket *exclude = nullptr) {
+        QJsonObject announcement;
+        announcement.insert("kind", kind);
+        announcement.insert("state", state);
+        announcement.insert("from", user);
+
+        Message outbound;
+        outbound.type = MessageType::MediaControl;
+        outbound.sender = user;
+        outbound.timestampMs = QDateTime::currentMSecsSinceEpoch();
+        outbound.payload = QJsonDocument(announcement).toJson(QJsonDocument::Compact);
+
+        const QByteArray encoded = MessageProtocol::encodeMessage(outbound);
+        for (QTcpSocket *sock : sockets) {
+            if (sock && sock->state() == QAbstractSocket::ConnectedState && sock != exclude) {
+                sock->write(encoded);
+            }
+        }
+    }
+
+    void sendMediaSnapshot(QTcpSocket *socket) {
+        QJsonArray active;
+        for (auto it = activeMedia.cbegin(); it != activeMedia.cend(); ++it) {
+            for (const QString &user : it.value()) {
+                QJsonObject entry;
+                entry.insert("kind", it.key());
+                entry.insert("state", "start");
+                entry.insert("from", user);
+                active.append(entry);
+            }
+        }
+
+        if (active.isEmpty()) return;
+
+        QJsonObject payload;
+        payload.insert("snapshot", true);
+        payload.insert("active", active);
+
+        Message resp;
+        resp.type = MessageType::MediaControl;
+        resp.sender = "server";
+        resp.timestampMs = QDateTime::currentMSecsSinceEpoch();
+        resp.payload = QJsonDocument(payload).toJson(QJsonDocument::Compact);
+        socket->write(MessageProtocol::encodeMessage(resp));
+    }
+
     void sendError(QTcpSocket *socket, const QString &text) {
         Message resp;
         resp.type = MessageType::Error;
