@@ -29,7 +29,15 @@ The following message types are defined in the `MessageType` enum:
 7. **HistoryResponse (7)**: Server → client, payload holds serialized history page.
 8. **UsersListRequest (8)**: Client → server, request list of connected users.
 9. **UsersListResponse (9)**: Server → client, payload is newline-separated list of users.
-10. **ScreenFrame (10)**: Bidirectional screen frame; payload is compressed image bytes (e.g., JPEG).
+10. **ScreenFrame (10)**: Bidirectional screen frame; payload is H.264 encoded data with a 4-byte frame id prefix. Special ids:
+    - `0` – codec config (SPS/PPS)
+    - `0xFFFFFFFF` – presence/beacon ("I'm streaming")
+    - `0xFFFFFFFE` – explicit stop marker
+11. **StreamAudio (11)**: Optional stereo PCM that accompanies screen share (mini RTP-like header inside payload).
+12. **UdpPortsAnnouncement (12)**: Client → server, announces local UDP ports for voice/video relay.
+13. **ChatMedia (13)**: Bidirectional media message; payload JSON `{ "mime": "image/png", "text": "caption", "dataBase64": "..." }`.
+14. **MediaControl (14)**: Start/stop presence updates for streams (`{"kind":"screen|video|voice","state":"start|stop","from":"user"}`) and snapshots (`{"snapshot":true,"active":[...]}`).
+15. **Ping (15)** / **Pong (16)**: Health check round trips; payload is opaque.
 255. **Error (255)**: Error description in payload.
 
 ## Example Message
