@@ -82,9 +82,11 @@ public slots:
 private:
     QTcpSocket *socket = nullptr;
     QQueue<QByteArray> queue;
+    qint64 queueBytes = 0;
     QMutex mutex;
     QWaitCondition cond;
     bool running = true;
+    static constexpr qint64 kMaxQueuedBytes = 1 * 1024 * 1024; // 1MB cap to avoid latency buildup
 };
 
 class ChatWindow : public QWidget {
@@ -142,6 +144,7 @@ private:
     void startStreamAudioCapture();
     void stopStreamAudioCapture();
     void ensureStreamAudioOutput();
+    QAudioDevice chooseLoopbackAudio() const;
     void sendStreamStopSignal(int delayMs = 0);
     QByteArray applyVoiceGain(const QByteArray &pcm, qreal gain, const QAudioFormat &format);
     void handleChatMediaMessage(const Message &msg);
@@ -196,6 +199,8 @@ private:
     int shareFps = 10;
     QSize shareResolution = QSize(1280, 720);
     int shareQuality = 60;
+    int webFrameStride = 3;
+    int webFrameCounter = 0;
     double micVolume = 1.0;
     double outputVolume = 1.0;
     QByteArray inputDeviceId;

@@ -38,6 +38,7 @@ The following message types are defined in the `MessageType` enum:
 13. **ChatMedia (13)**: Bidirectional media message; payload JSON `{ "mime": "image/png", "text": "caption", "dataBase64": "..." }`.
 14. **MediaControl (14)**: Start/stop presence updates for streams (`{"kind":"screen|video|voice","state":"start|stop","from":"user"}`) and snapshots (`{"snapshot":true,"active":[...]}`).
 15. **Ping (15)** / **Pong (16)**: Health check round trips; payload is opaque.
+17. **WebFrame (17)**: JPEG frame for the HTTP bridge so browser viewers can see the shared screen without the native client.
 255. **Error (255)**: Error description in payload.
 
 ## Example Message

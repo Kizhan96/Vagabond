@@ -27,6 +27,7 @@ enum class MessageType : quint8 {
     MediaControl = 14,
     Ping = 15,
     Pong = 16,
+    WebFrame = 17,
     Error = 255
 };
 

@@ -60,14 +60,21 @@ SendWorker::SendWorker(QTcpSocket *socket, QObject *parent) : QObject(parent), s
 
 void SendWorker::enqueue(const QByteArray &packet) {
     QMutexLocker lock(&mutex);
+    while (!queue.isEmpty() && queueBytes + packet.size() > kMaxQueuedBytes) {
+        queueBytes -= queue.head().size();
+        queue.dequeue();
+    }
     queue.enqueue(packet);
+    queueBytes += packet.size();
     cond.wakeOne();
 }
 
 void SendWorker::enqueuePriority(const QByteArray &packet) {
     QMutexLocker lock(&mutex);
     queue.clear();
+    queueBytes = 0;
     queue.prepend(packet);
+    queueBytes += packet.size();
     cond.wakeOne();
 }
 
@@ -90,6 +97,7 @@ void SendWorker::processLoop() {
                 continue;
             }
             packet = queue.dequeue();
+            queueBytes -= packet.size();
         }
         if (!packet.isEmpty() && socket) {
             QMetaObject::invokeMethod(socket, [s = socket, packet]() {
@@ -366,6 +374,7 @@ ChatWindow::ChatWindow(QWidget *parent) : QWidget(parent) {
     connect(&socket, &QTcpSocket::connected, this, &ChatWindow::onSocketConnected);
     connect(&socket, &QTcpSocket::disconnected, this, &ChatWindow::onSocketDisconnected);
     connect(&socket, &QTcpSocket::errorOccurred, this, &ChatWindow::onSocketError);
+    socket.setSocketOption(QAbstractSocket::LowDelayOption, 1);
     voiceUdp.bind(QHostAddress::Any, 0, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint);
     videoUdp.bind(QHostAddress::Any, 0, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint);
     connect(&voiceUdp, &QUdpSocket::readyRead, this, &ChatWindow::handleVoiceUdp);
@@ -847,6 +856,14 @@ void ChatWindow::handleScreenFrameMessage(const QString &sender, const QByteArra
 }
 
 void ChatWindow::handleVoiceUdp() {
+    struct PendingVoice {
+        MediaHeader header{};
+        QByteArray payload;
+    };
+    auto isSeqNewer = [](quint16 current, quint16 previous) {
+        return static_cast<quint16>(current - previous) < 0x8000;
+    };
+    QHash<QString, PendingVoice> newest;
     while (voiceUdp.hasPendingDatagrams()) {
         QByteArray datagram;
         datagram.resize(int(voiceUdp.pendingDatagramSize()));
@@ -859,7 +876,14 @@ void ChatWindow::handleVoiceUdp() {
         if (hdr.mediaType != 0) continue;
         const QString sender = ssrcToUser.value(hdr.ssrc);
         if (sender.isEmpty()) continue;
-        processIncomingVoice(sender, payload, voice.audioFormat());
+        auto it = newest.find(sender);
+        if (it == newest.end() || isSeqNewer(hdr.seq, it->header.seq)) {
+            newest.insert(sender, PendingVoice{hdr, payload});
+        }
+    }
+
+    for (auto it = newest.cbegin(); it != newest.cend(); ++it) {
+        processIncomingVoice(it.key(), it.value().payload, voice.audioFormat());
     }
 }
 
@@ -1067,6 +1091,28 @@ void ChatWindow::onFrameReady(const QPixmap &frame) {
     // mark ourselves live locally to show [LIVE] tag
     streamingUsers.insert(auth.currentUsername());
     updateUserListDisplay();
+
+    // Low-rate JPEG copy for web viewers
+    if (++webFrameCounter >= webFrameStride) {
+        webFrameCounter = 0;
+        QImage webImg = frame.toImage();
+        const int maxWidth = 960;
+        if (webImg.width() > maxWidth) {
+            webImg = webImg.scaledToWidth(maxWidth, Qt::SmoothTransformation);
+        }
+        QByteArray jpeg;
+        QBuffer buf(&jpeg);
+        buf.open(QIODevice::WriteOnly);
+        webImg.save(&buf, "JPG", std::clamp(shareQuality, 40, 85));
+        if (!jpeg.isEmpty()) {
+            Message web;
+            web.type = MessageType::WebFrame;
+            web.timestampMs = ts;
+            web.payload = jpeg;
+            socket.write(MessageProtocol::encodeMessage(web));
+        }
+    }
+
     if (encodingInProgress) {
         pendingFrame = frame.toImage();
         pendingFrameId = frameId;
@@ -1623,13 +1669,27 @@ void ChatWindow::scrollChatToBottom() {
     chatView->ensureCursorVisible();
 }
 
+QAudioDevice ChatWindow::chooseLoopbackAudio() const {
+    const QList<QAudioDevice> inputs = QMediaDevices::audioInputs();
+    for (const auto &dev : inputs) {
+#if QT_CONFIG(wasapi)
+        if (dev.isLoopback()) return dev;
+#endif
+        const QString desc = dev.description().toLower();
+        if (desc.contains("loopback") || desc.contains("stereo mix") || desc.contains("what u hear")) {
+            return dev;
+        }
+    }
+    return QMediaDevices::defaultAudioInput();
+}
+
 void ChatWindow::startStreamAudioCapture() {
     stopStreamAudioCapture();
     QAudioFormat fmt;
     fmt.setSampleRate(48000);
     fmt.setChannelCount(2);
     fmt.setSampleFormat(QAudioFormat::Int16);
-    QAudioDevice loopDev = QMediaDevices::defaultAudioInput();
+    QAudioDevice loopDev = chooseLoopbackAudio();
     streamAudioInput = new QAudioSource(loopDev, fmt, this);
     streamAudioInput->setBufferSize(4096);
     streamAudioInputDevice = streamAudioInput->start();
