@@ -213,7 +213,7 @@ private:
     QMap<QString, qreal> userVoiceGains;
     QHash<quint32, QString> ssrcToUser;
     bool micOn = false;
-    bool micMuted = false;
+    bool playbackMuted = false;
     QString currentStreamUser;
     bool isLocalSharingPreviewVisible = false;
     quint32 lastFrameIdSent = 0;

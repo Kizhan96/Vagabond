@@ -14,7 +14,8 @@ The Vagabond server handles client connections, manages user authentication, fac
 - **Media Presence Signals**: Notifies clients when peers start/stop voice, video, or screen sharing and shares the current active set with newly connected clients.
 - **Message History Storage**: Stores and retrieves past messages for users.
 - **Defined Message Protocol**: Implements a structured protocol for message encoding and decoding.
-- **Browser Viewer Bridge**: Serves MJPEG video plus WAV audio for the active screen sharer at `http://<server>:8080/viewer?user=<username>` so phones can watch without the Qt client.
+- **Browser Viewer Bridge**: Serves MJPEG video plus WAV audio for the active screen sharer at `http://<server>:8080/viewer?user=<username>` so phones can watch without the Qt client. Load the URL with the sharer's username in the query, press **Watch** if it is not auto-started, and the page will subscribe to `/mjpeg/<user>` and `/audio/<user>` streams.
+- **Threaded HTTP bridge**: The MJPEG/WAV HTTP helper runs on its own Qt thread so it cannot block TCP or UDP handling while serving large viewers.
 
 ## Setup Instructions
 

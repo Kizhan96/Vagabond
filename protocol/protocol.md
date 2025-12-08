@@ -23,23 +23,36 @@ The following message types are defined in the `MessageType` enum:
    - Payload: JSON `{ "username": "...", "password": "...", "register": true|false }`
 2. **LoginResponse (2)**: Server → client, payload contains `"ok"` or error text; may carry a token.
 3. **ChatMessage (3)**: Bidirectional text message; payload is UTF-8 text.
-4. **VoiceChunk (4)**: Bidirectional audio chunk (e.g., PCM/Opus frame).
+4. **VoiceChunk (4)**: (TCP fallback, deprecated) Audio chunks now ride over UDP media datagrams with `mediaType=0`.
 5. **LogoutRequest (5)**: Client → server, asks to end the session.
 6. **HistoryRequest (6)**: Client → server, may include channel/user scope in payload.
 7. **HistoryResponse (7)**: Server → client, payload holds serialized history page.
 8. **UsersListRequest (8)**: Client → server, request list of connected users.
 9. **UsersListResponse (9)**: Server → client, payload is newline-separated list of users.
-10. **ScreenFrame (10)**: Bidirectional screen frame; payload is H.264 encoded data with a 4-byte frame id prefix. Special ids:
-    - `0` – codec config (SPS/PPS)
+10. **ScreenFrame (10)**: Stream metadata/beacons on TCP; actual frames travel via UDP media datagrams with `mediaType=1` and a 4-byte frame id prefix inside the payload. Special ids when sent over TCP for coordination:
     - `0xFFFFFFFF` – presence/beacon ("I'm streaming")
     - `0xFFFFFFFE` – explicit stop marker
-11. **StreamAudio (11)**: Optional stereo PCM that accompanies screen share (mini RTP-like header inside payload).
+11. **StreamAudio (11)**: (TCP fallback, deprecated) Screen-share audio now rides over UDP media datagrams with `mediaType=2` and a mini header `seq (u32) + ts (qint64)` preceding PCM data.
 12. **UdpPortsAnnouncement (12)**: Client → server, announces local UDP ports for voice/video relay.
 13. **ChatMedia (13)**: Bidirectional media message; payload JSON `{ "mime": "image/png", "text": "caption", "dataBase64": "..." }`.
 14. **MediaControl (14)**: Start/stop presence updates for streams (`{"kind":"screen|video|voice","state":"start|stop","from":"user"}`) and snapshots (`{"snapshot":true,"active":[...]}`).
 15. **Ping (15)** / **Pong (16)**: Health check round trips; payload is opaque.
 17. **WebFrame (17)**: JPEG frame for the HTTP bridge so browser viewers can see the shared screen without the native client.
 255. **Error (255)**: Error description in payload.
+
+## UDP media datagrams
+
+Voice, screen video, and stream-audio now travel exclusively over UDP. Each datagram begins with a `MediaHeader` encoded in
+big-endian order:
+
+```
+| version (u8) | mediaType (u8) | codec (u8) | flags (u8) | ssrc (u32) | timestampMs (u32) | seq (u16) | payloadLen (u16) | payload |
+```
+
+- `mediaType`: `0` voice, `1` video/screen frames, `2` stream audio accompanying a share.
+- `codec`: `0` raw/Opus audio, `1` H.264 video.
+- Payloads for video start with a 4-byte frame id followed by H.264 bytes. Stream audio payloads begin with `seq (u32) + ts (qint64)`
+  before PCM data to aid de-jittering.
 
 ## Example Message
 ### Sending a Chat Message

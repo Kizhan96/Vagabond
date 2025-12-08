@@ -12,6 +12,7 @@
 #include <QBuffer>
 #include <QUrl>
 #include <QUrlQuery>
+#include <QThread>
 #include "authentication.h"
 #include "chat.h"
 #include "message_protocol.h"
@@ -27,6 +28,7 @@ public:
         connect(&httpServer, &QTcpServer::newConnection, this, &HttpBridge::onNewConnection);
     }
 
+public slots:
     bool start(quint16 port) {
         if (!httpServer.listen(QHostAddress::Any, port)) {
             qWarning() << "[http] bridge listen failed" << port << httpServer.errorString();
@@ -154,24 +156,26 @@ private:
 
     QByteArray viewerHtml(const QString &path) const {
         const QUrl url(path);
-        const QString prefillUser = QUrlQuery(url).queryItemValue(QStringLiteral("user"));
-        static const QByteArray html =
-            "<!doctype html><html><head><meta charset=\"utf-8\"><title>Vagabond Web Viewer</title>"
+        QUrlQuery query(url);
+        const QString prefillUser = query.queryItemValue(QStringLiteral("user"));
+        static const QByteArray html = QByteArrayLiteral(
+            R"(<!doctype html><html><head><meta charset="utf-8"><title>Vagabond Web Viewer</title>"
             "<style>body{margin:0;background:#111;color:#eee;font-family:sans-serif;}#wrap{display:flex;flex-direction:column;height:100vh;}"
-            "#video{flex:1;object-fit:contain;background:#000;}header{padding:8px 12px;background:#222;}label{margin-right:6px;}"
-            "</style></head><body><div id=\"wrap\"><header><label>User</label><input id=\"u\"/><button id=\"go\">Watch</button></header>"
-            "<img id=\"video\"/><audio id=\"audio\" controls autoplay></audio></div><script>const p=new URLSearchParams(location.search);"
-            "const u=document.getElementById('u');u.value=p.get('user')||'';const img=document.getElementById('video');const aud=document.getElementById('audio');"
-            "function set(){if(!u.value)return;img.src='/mjpeg/'+encodeURIComponent(u.value);aud.src='/audio/'+encodeURIComponent(u.value);}"
-            "document.getElementById('go').onclick=set;if(u.value)set();</script></body></html>";
+            "#video{flex:1;object-fit:contain;background:#000;}header{padding:8px 12px;background:#222;}label{margin-right:6px;}</style>"
+            "</head><body><div id="wrap"><header><label>User</label><input id="u"/><button id="go">Watch</button></header>"
+            "<img id="video"/><audio id="audio" controls autoplay></audio></div><script>const p=new URLSearchParams(location.search);"
+            "const u=document.getElementById('u');const img=document.getElementById('video');const aud=document.getElementById('audio');"
+            "const preset=p.get('user')||'';if(preset){u.value=preset;}function set(){const name=(u.value||'').trim();if(!name)return;"
+            "img.src='/mjpeg/'+encodeURIComponent(name);aud.src='/audio/'+encodeURIComponent(name);}document.getElementById('go').onclick=set;"
+            "if(u.value)set();</script></body></html>)");
         if (prefillUser.isEmpty()) {
             return html;
         }
         QByteArray patched = html;
-        patched.replace("p.get('user')||''", QStringLiteral("'%1'").arg(prefillUser).toUtf8());
+        patched.replace("const preset=p.get('user')||'';",
+                         QStringLiteral("const preset='%1';").arg(prefillUser).toUtf8());
         return patched;
     }
-
     QByteArray wavHeader() const {
         QByteArray header;
         QBuffer buf(&header);
@@ -267,8 +271,17 @@ public:
         videoUdp.bind(QHostAddress::Any, kVideoUdpPort, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint);
         connect(&voiceUdp, &QUdpSocket::readyRead, this, &Server::onVoiceUdpReady);
         connect(&videoUdp, &QUdpSocket::readyRead, this, &Server::onVideoUdpReady);
-        httpBridge.start(8080);
+        httpBridge = new HttpBridge();
+        httpBridge->moveToThread(&httpThread);
+        connect(&httpThread, &QThread::finished, httpBridge, &QObject::deleteLater);
+        httpThread.start();
+        QMetaObject::invokeMethod(httpBridge, "start", Qt::QueuedConnection, Q_ARG(quint16, 8080));
         bot.start();
+    }
+
+    ~Server() override {
+        httpThread.quit();
+        httpThread.wait(2000);
     }
 
 private slots:
@@ -354,14 +367,17 @@ private:
         case MessageType::UdpPortsAnnouncement:
             handleUdpPorts(socket, msg);
             break;
-        case MessageType::VoiceChunk:
-            handleVoice(socket, msg);
-            break;
         case MessageType::ScreenFrame:
             handleScreenFrame(socket, msg);
             break;
-        case MessageType::StreamAudio:
-            handleStreamAudio(socket, msg);
+        case MessageType::WebFrame:
+            handleWebFrame(socket, msg);
+            break;
+        case MessageType::MediaControl:
+            handleMediaControl(socket, msg);
+            break;
+        case MessageType::Ping:
+            handlePing(socket);
             break;
         case MessageType::WebFrame:
             handleWebFrame(socket, msg);
@@ -374,6 +390,10 @@ private:
             break;
         case MessageType::LogoutRequest:
             handleLogout(socket);
+            break;
+        case MessageType::VoiceChunk:
+        case MessageType::StreamAudio:
+            sendError(socket, "Use UDP for media streams");
             break;
         default:
             sendError(socket, "Unsupported message type");
@@ -555,23 +575,6 @@ private:
         broadcastUsersList();
     }
 
-    void handleVoice(QTcpSocket *socket, const Message &msg) {
-        const QString sender = userBySocket.value(socket);
-        if (sender.isEmpty()) {
-            sendError(socket, "Not authenticated");
-            return;
-        }
-        Message outbound = msg;
-        outbound.sender = sender;
-        outbound.timestampMs = QDateTime::currentMSecsSinceEpoch();
-        const QByteArray encoded = MessageProtocol::encodeMessage(outbound);
-        for (QTcpSocket *sock : sockets) {
-            if (sock && sock->state() == QAbstractSocket::ConnectedState && sock != socket) {
-                sock->write(encoded);
-            }
-        }
-    }
-
     void handleScreenFrame(QTcpSocket *socket, const Message &msg) {
         const QString sender = userBySocket.value(socket);
         if (sender.isEmpty()) {
@@ -589,34 +592,31 @@ private:
         }
     }
 
-    void handleStreamAudio(QTcpSocket *socket, const Message &msg) {
-        const QString sender = userBySocket.value(socket);
-        if (sender.isEmpty()) {
-            sendError(socket, "Not authenticated");
-            return;
-        }
-        Message outbound = msg;
-        outbound.sender = sender;
-        outbound.timestampMs = QDateTime::currentMSecsSinceEpoch();
-        const QByteArray encoded = MessageProtocol::encodeMessage(outbound);
-        for (QTcpSocket *sock : sockets) {
-            if (sock && sock->state() == QAbstractSocket::ConnectedState && sock != socket) {
-                sock->write(encoded);
-            }
-        }
-        if (msg.payload.size() > static_cast<int>(sizeof(quint32) + sizeof(qint64))) {
-            QByteArray pcm = msg.payload.mid(sizeof(quint32) + sizeof(qint64));
-            httpBridge.pushAudio(sender, pcm);
-        }
-    }
-
     void handleWebFrame(QTcpSocket *socket, const Message &msg) {
         const QString sender = userBySocket.value(socket);
         if (sender.isEmpty()) {
             sendError(socket, "Not authenticated");
             return;
         }
-        httpBridge.updateFrame(sender, msg.payload);
+        publishWebFrame(sender, msg.payload);
+    }
+
+    void handleMediaControl(QTcpSocket *socket, const Message &msg);
+
+    void handlePing(QTcpSocket *socket);
+
+    void broadcastMediaUpdate(const QString &kind, const QString &user, const QString &state, QTcpSocket *exclude = nullptr);
+
+    void sendMediaSnapshot(QTcpSocket *socket);
+
+    void publishWebFrame(const QString &user, const QByteArray &jpeg) {
+        if (!httpBridge) return;
+        QMetaObject::invokeMethod(httpBridge, "updateFrame", Qt::QueuedConnection, Q_ARG(QString, user), Q_ARG(QByteArray, jpeg));
+    }
+
+    void publishWebAudio(const QString &user, const QByteArray &pcm) {
+        if (!httpBridge) return;
+        QMetaObject::invokeMethod(httpBridge, "pushAudio", Qt::QueuedConnection, Q_ARG(QString, user), Q_ARG(QByteArray, pcm));
     }
 
     void handleMediaControl(QTcpSocket *socket, const Message &msg);
@@ -649,12 +649,17 @@ private:
             MediaHeader hdr{};
             QByteArray payload;
             if (!unpackMediaDatagram(datagram, hdr, payload)) continue;
+            if (hdr.mediaType != 0 && hdr.mediaType != 2) continue;
             hdr.ssrc = ssrcForUser(sender);
             const QByteArray outbound = packMediaDatagram(hdr, payload);
             for (auto it = udpByUser.cbegin(); it != udpByUser.cend(); ++it) {
                 if (it.key() == sender) continue;
                 if (it.value().voicePort == 0) continue;
                 voiceUdp.writeDatagram(outbound, it.value().address, it.value().voicePort);
+            }
+            if (hdr.mediaType == 2 && payload.size() > static_cast<int>(sizeof(quint32) + sizeof(qint64))) {
+                QByteArray pcm = payload.mid(sizeof(quint32) + sizeof(qint64));
+                publishWebAudio(sender, pcm);
             }
         }
     }
@@ -702,7 +707,8 @@ private:
         }
     }
 
-    HttpBridge httpBridge;
+    HttpBridge *httpBridge = nullptr;
+    QThread httpThread;
     Authentication auth;
     TelegramLinks links;
     TelegramBot bot;

@@ -45,7 +45,7 @@ struct User {
 
 struct MediaHeader {
     quint8 version = 1;
-    quint8 mediaType = 0;
+    quint8 mediaType = 0; // 0 = voice, 1 = video, 2 = stream audio
     quint8 codec = 0;
     quint8 flags = 0;
     quint32 ssrc = 0;

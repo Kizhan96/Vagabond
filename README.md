@@ -8,7 +8,8 @@ Vagabond is a Qt 6.9.1 C++ client-server application that provides authenticatio
 - **Voice & Chat**: Bidirectional audio and text messaging.
 - **History**: Server-side history log with client retrieval.
 - **Protocol**: Length-prefixed binary protocol with typed messages.
-- **Mobile-friendly viewer**: Optional MJPEG + audio stream at `http://<server>:8080/viewer?user=<name>` so phones can watch a screen share without the desktop app.
+- **Mobile-friendly viewer**: Optional MJPEG + audio stream at `http://<server>:8080/viewer?user=<name>` so phones can watch a screen share without the desktop app. Open the link, keep the `user` query equal to the sharer's username, and the page will auto-fill and start the MJPEG video plus WAV audio.
+- **Chat file sharing**: Tap the clip/`Attach` button next to the message box to send a file (<=5 MB) with an optional caption; recipients automatically download and preview supported images.
 
 ## Project Structure
 
