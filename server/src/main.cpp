@@ -571,15 +571,7 @@ private:
             sendError(socket, "Not authenticated");
             return;
         }
-        Message outbound = msg;
-        outbound.sender = sender;
-        outbound.timestampMs = QDateTime::currentMSecsSinceEpoch();
-        const QByteArray encoded = MessageProtocol::encodeMessage(outbound);
-        for (QTcpSocket *sock : sockets) {
-            if (sock && sock->state() == QAbstractSocket::ConnectedState && sock != socket) {
-                sock->write(encoded);
-            }
-        }
+        publishWebFrame(sender, msg.payload);
     }
 
     void handleWebFrame(QTcpSocket *socket, const Message &msg) {
