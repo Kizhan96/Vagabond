@@ -23,11 +23,6 @@ enum class MessageType : quint8 {
     ScreenFrame = 10,
     StreamAudio = 11,
     UdpPortsAnnouncement = 12,
-    ChatMedia = 13,
-    MediaControl = 14,
-    Ping = 15,
-    Pong = 16,
-    WebFrame = 17,
     Error = 255
 };
 
@@ -41,7 +36,7 @@ struct Message {
 
 struct MediaHeader {
     quint8 version = 1;
-    quint8 mediaType = 0; // 0 = voice, 1 = video, 2 = stream audio
+    quint8 mediaType = 0; // 0 = voice, 1 = video
     quint8 codec = 0;      // 0 = Opus, 1 = H264
     quint8 flags = 0;      // bit0: keyframe, bit1: marker
     quint32 ssrc = 0;

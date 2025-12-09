@@ -271,10 +271,6 @@ public:
         videoUdp.bind(QHostAddress::Any, kVideoUdpPort, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint);
         connect(&voiceUdp, &QUdpSocket::readyRead, this, &Server::onVoiceUdpReady);
         connect(&videoUdp, &QUdpSocket::readyRead, this, &Server::onVideoUdpReady);
-        httpBridge->moveToThread(&httpThread);
-        connect(&httpThread, &QThread::finished, httpBridge, &QObject::deleteLater);
-        httpThread.start();
-        QMetaObject::invokeMethod(httpBridge, "start", Qt::QueuedConnection, Q_ARG(quint16, 8080));
         bot.start();
     }
 
@@ -299,15 +295,9 @@ private:
         buffers.remove(socket);
         const QString user = userBySocket.take(socket);
         if (!user.isEmpty()) {
-            ssrcToUser.remove(ssrcForUser(user));
             const auto ep = udpByUser.take(user);
             if (ep.voicePort) voiceEndpointToUser.remove(endpointKey(ep.address, ep.voicePort));
             if (ep.videoPort) videoEndpointToUser.remove(endpointKey(ep.address, ep.videoPort));
-            for (auto it = activeMedia.begin(); it != activeMedia.end(); ++it) {
-                if (it.value().remove(user)) {
-                    broadcastMediaUpdate(it.key(), user, "stop", socket);
-                }
-            }
         }
         broadcastUsersList();
         socket->deleteLater();
@@ -366,6 +356,9 @@ private:
             break;
         case MessageType::UdpPortsAnnouncement:
             handleUdpPorts(socket, msg);
+            break;
+        case MessageType::VoiceChunk:
+            handleVoice(socket, msg);
             break;
         case MessageType::ScreenFrame:
             handleScreenFrame(socket, msg);
@@ -438,6 +431,36 @@ private:
         qInfo() << "[auth] success" << username;
         broadcastUsersList();
         sendMediaSnapshot(socket);
+    }
+
+    void handleUdpPorts(QTcpSocket *socket, const Message &msg) {
+        const QString sender = userBySocket.value(socket);
+        if (sender.isEmpty()) {
+            sendError(socket, "Not authenticated");
+            return;
+        }
+        const QJsonDocument doc = QJsonDocument::fromJson(msg.payload);
+        if (!doc.isObject()) {
+            sendError(socket, "Invalid UDP announce payload");
+            return;
+        }
+        const QJsonObject obj = doc.object();
+        const quint16 voicePort = static_cast<quint16>(obj.value("voicePort").toInt());
+        const quint16 videoPort = static_cast<quint16>(obj.value("videoPort").toInt());
+        const QHostAddress addr = socket->peerAddress();
+
+        const auto previous = udpByUser.take(sender);
+        if (previous.voicePort) voiceEndpointToUser.remove(endpointKey(previous.address, previous.voicePort));
+        if (previous.videoPort) videoEndpointToUser.remove(endpointKey(previous.address, previous.videoPort));
+
+        UdpEndpoints ep;
+        ep.address = addr;
+        ep.voicePort = voicePort;
+        ep.videoPort = videoPort;
+        udpByUser.insert(sender, ep);
+        if (voicePort) voiceEndpointToUser.insert(endpointKey(addr, voicePort), sender);
+        if (videoPort) videoEndpointToUser.insert(endpointKey(addr, videoPort), sender);
+        qInfo() << "[udp] announce" << sender << addr.toString() << "voice" << voicePort << "video" << videoPort;
     }
 
     void handleUdpPorts(QTcpSocket *socket, const Message &msg) {
@@ -678,6 +701,54 @@ private:
         return QStringLiteral("%1:%2").arg(addr.toString()).arg(port);
     }
 
+    void onVoiceUdpReady() {
+        while (voiceUdp.hasPendingDatagrams()) {
+            QByteArray datagram;
+            datagram.resize(int(voiceUdp.pendingDatagramSize()));
+            QHostAddress addr;
+            quint16 port = 0;
+            voiceUdp.readDatagram(datagram.data(), datagram.size(), &addr, &port);
+            const QString sender = voiceEndpointToUser.value(endpointKey(addr, port));
+            if (sender.isEmpty()) continue;
+            MediaHeader hdr{};
+            QByteArray payload;
+            if (!unpackMediaDatagram(datagram, hdr, payload)) continue;
+            hdr.ssrc = ssrcForUser(sender);
+            const QByteArray outbound = packMediaDatagram(hdr, payload);
+            for (auto it = udpByUser.cbegin(); it != udpByUser.cend(); ++it) {
+                if (it.key() == sender) continue;
+                if (it.value().voicePort == 0) continue;
+                voiceUdp.writeDatagram(outbound, it.value().address, it.value().voicePort);
+            }
+        }
+    }
+
+    void onVideoUdpReady() {
+        while (videoUdp.hasPendingDatagrams()) {
+            QByteArray datagram;
+            datagram.resize(int(videoUdp.pendingDatagramSize()));
+            QHostAddress addr;
+            quint16 port = 0;
+            videoUdp.readDatagram(datagram.data(), datagram.size(), &addr, &port);
+            const QString sender = videoEndpointToUser.value(endpointKey(addr, port));
+            if (sender.isEmpty()) continue;
+            MediaHeader hdr{};
+            QByteArray payload;
+            if (!unpackMediaDatagram(datagram, hdr, payload)) continue;
+            hdr.ssrc = ssrcForUser(sender);
+            const QByteArray outbound = packMediaDatagram(hdr, payload);
+            for (auto it = udpByUser.cbegin(); it != udpByUser.cend(); ++it) {
+                if (it.key() == sender) continue;
+                if (it.value().videoPort == 0) continue;
+                videoUdp.writeDatagram(outbound, it.value().address, it.value().videoPort);
+            }
+        }
+    }
+
+    QString endpointKey(const QHostAddress &addr, quint16 port) const {
+        return QStringLiteral("%1:%2").arg(addr.toString()).arg(port);
+    }
+
     void broadcastUsersList() {
         QStringList users = userBySocket.values();
         users.removeAll(QString());
@@ -714,8 +785,6 @@ private:
     QHash<QString, UdpEndpoints> udpByUser;
     QHash<QString, QString> voiceEndpointToUser;
     QHash<QString, QString> videoEndpointToUser;
-    QHash<QString, QSet<QString>> activeMedia;
-    QHash<quint32, QString> ssrcToUser;
     QUdpSocket voiceUdp;
     QUdpSocket videoUdp;
     static constexpr quint16 kVoiceUdpPort = 40000;

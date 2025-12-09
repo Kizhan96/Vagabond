@@ -188,33 +188,24 @@ void TelegramBot::processUsername(qint64 chatId, qint64 telegramId, const QStrin
 }
 
 void TelegramBot::createTestUsers(qint64 chatId, int count) {
-    const QString simplePassword = QStringLiteral("1234");
     QStringList lines;
     int created = 0;
     int suffix = 1;
 
     while (created < count && suffix < count + 1000) {
-        const QStringList candidates = {
-            QStringLiteral("t%1").arg(suffix),
-            QStringLiteral("test%1").arg(suffix),
-            QStringLiteral("testuser%1").arg(suffix)
-        };
-
-        bool madeUser = false;
-        for (const QString &username : candidates) {
-            if (m_auth->userExists(username)) continue;
-            if (m_auth->registerUser(username, simplePassword)) {
-                lines << QStringLiteral("%1 / %2").arg(username, simplePassword);
+        const QString username = QStringLiteral("testuser%1").arg(suffix);
+        if (!m_auth->userExists(username)) {
+            QString pwd;
+            QString err;
+            if (m_auth->createUserWithRandomPassword(username, &pwd, &err)) {
+                lines << QStringLiteral("%1 / %2").arg(username, pwd);
                 ++created;
-                madeUser = true;
-                break;
+            } else if (!err.isEmpty()) {
+                sendMessage(chatId, QStringLiteral("Ошибка: %1").arg(err));
+                return;
             }
         }
         ++suffix;
-
-        // If none of the candidates were available, keep searching with the next suffix
-        // until we hit the safety bound.
-        Q_UNUSED(madeUser);
     }
 
     if (lines.isEmpty()) {
@@ -222,9 +213,7 @@ void TelegramBot::createTestUsers(qint64 chatId, int count) {
         return;
     }
 
-    QString response = QStringLiteral("Создано %1 аккаунтов (пароль для всех: %2):\n")
-                           .arg(created)
-                           .arg(simplePassword);
+    QString response = QStringLiteral("Создано %1 аккаунтов:\n").arg(created);
     response += lines.join('\n');
     sendMessage(chatId, response);
 }

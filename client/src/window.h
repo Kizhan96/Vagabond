@@ -149,10 +149,6 @@ private:
     QAudioDevice chooseLoopbackAudio() const;
     void sendStreamStopSignal(int delayMs = 0);
     QByteArray applyVoiceGain(const QByteArray &pcm, qreal gain, const QAudioFormat &format);
-    void handleChatMediaMessage(const Message &msg);
-    void handleMediaControlMessage(const Message &msg);
-    void dispatchVideoPayload(const QString &sender, const QByteArray &payload);
-    void sendMediaState(const QString &kind, const QString &state);
     void sendUdpAnnouncement();
     void handleVoiceUdp();
     void handleVideoUdp();
@@ -230,14 +226,6 @@ private:
     H264Encoder h264Encoder;
     FrameEncodeWorker *encoderWorker = nullptr;
     QThread encoderThread;
-    struct PendingVideoFrame {
-        MediaHeader header{};
-        QByteArray payload;
-    };
-    static bool isSeqNewer(quint16 current, quint16 previous) {
-        return static_cast<quint16>(current - previous) < 0x8000;
-    }
-    QHash<QString, PendingVideoFrame> latestVideoBySender;
     quint16 voiceSeq = 0;
     quint16 videoSeq = 0;
 

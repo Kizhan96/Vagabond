@@ -1,15 +1,12 @@
 # Vagabond
 
-Vagabond is a Qt 6.9.1 C++ client-server application that provides authentication, real-time voice, chat, message history storage, and a defined message protocol.
+Vagabond is a Qt 6.9.1 C++ desktop client that now speaks directly to LiveKit. The legacy custom server is deprecated; instead, each LiveKit room is rendered through the official JavaScript SDK inside a Qt WebEngine view.
 
 ## Features
 
-- **Authentication**: Login and registration with basic credential handling.
-- **Voice & Chat**: Bidirectional audio and text messaging.
-- **History**: Server-side history log with client retrieval.
-- **Protocol**: Length-prefixed binary protocol with typed messages.
-- **Mobile-friendly viewer**: Optional MJPEG + audio stream at `http://<server>:8080/viewer?user=<name>` so phones can watch a screen share without the desktop app. Open the link, keep the `user` query equal to the sharer's username, and the page will auto-fill and start the MJPEG video plus WAV audio.
-- **Chat file sharing**: Tap the clip/`Attach` button next to the message box to send a file (<=5 MB) with an optional caption; recipients automatically download and preview supported images.
+- **LiveKit-native media**: Join any LiveKit room using your endpoint + JWT token; publish local audio/video and screen share.
+- **Discord-style multi-room tabs**: Open multiple rooms at once, each in its own tab with per-room logs and chat (LiveKit data channel).
+- **Device control**: Inline mute/unmute plus microphone/camera device selection and one-click screen sharing.
 
 ## Project Structure
 
@@ -54,34 +51,25 @@ This installs Qt 6 (base, tools, multimedia, and declarative), FFmpeg dev librar
    cmake ..
    cmake --build .
    ```
-3. **Build Server**
-   ```
-   cd ../../server
-   mkdir build
-   cd build
-   cmake ..
-   cmake --build .
-   ```
 
 ## Run
 
-- **Server**: From `server/build`, run the server binary. It listens on `0.0.0.0:12345`, stores users in `users.json`, and history in `history.log` in the working directory.
-- **Client**: From `client/build`, run the client binary. Configure connection via environment variables:
-  - `APP_HOST` (default `127.0.0.1`)
-  - `APP_PORT` (default `12345`)
-  - `APP_USER` (default `demo`)
-  - `APP_PASS` (default `demo`)
-  - `APP_REGISTER` (`1` to register then login, `0` to only login`)
+Point the client at your LiveKit Cloud instance or self-hosted LiveKit server.
 
-PowerShell example:
+1. Create a LiveKit access token for the desired room/user (for example via the LiveKit CLI or REST API).
+2. Launch the Qt client with the LiveKit endpoint and token provided via environment variables or by pasting into the UI:
+
+   - `LIVEKIT_URL` – e.g., `wss://your-host.livekit.cloud`
+   - `LIVEKIT_TOKEN` – JWT produced by your LiveKit API key/secret
+
+Example:
 ```
-set APP_HOST=127.0.0.1
-set APP_PORT=12345
-set APP_USER=alice
-set APP_PASS=secret
-set APP_REGISTER=1
+set LIVEKIT_URL=wss://your-host.livekit.cloud
+set LIVEKIT_TOKEN=eyJhbGciOi...
 ./client.exe
 ```
+
+Once connected, open one or more tabs with room labels; each tab joins the LiveKit room, publishes media, and renders remote participants.
 
 ## Windows build & deployment tips
 

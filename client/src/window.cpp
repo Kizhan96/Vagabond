@@ -43,7 +43,6 @@
 #include <QHostAddress>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QJsonArray>
 #include <QWidgetAction>
 #include <QTextDocument>
 #include <QUrl>
@@ -375,7 +374,6 @@ ChatWindow::ChatWindow(QWidget *parent) : QWidget(parent) {
     connect(&socket, &QTcpSocket::connected, this, &ChatWindow::onSocketConnected);
     connect(&socket, &QTcpSocket::disconnected, this, &ChatWindow::onSocketDisconnected);
     connect(&socket, &QTcpSocket::errorOccurred, this, &ChatWindow::onSocketError);
-    socket.setSocketOption(QAbstractSocket::LowDelayOption, 1);
     voiceUdp.bind(QHostAddress::Any, 0, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint);
     videoUdp.bind(QHostAddress::Any, 0, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint);
     connect(&voiceUdp, &QUdpSocket::readyRead, this, &ChatWindow::handleVoiceUdp);
@@ -402,7 +400,6 @@ ChatWindow::ChatWindow(QWidget *parent) : QWidget(parent) {
         hdr.seq = ++voiceSeq;
         const QByteArray packet = packMediaDatagram(hdr, data);
         voiceUdp.writeDatagram(packet, QHostAddress(hostValue), kVoiceUdpPort);
-
     });
     connect(&voice, &Voice::playbackError, this, [this](const QString &msg) {
         QMessageBox::warning(this, "Audio playback", msg);
@@ -783,13 +780,31 @@ void ChatWindow::onSocketReadyRead() {
             scrollChatToBottom();
             continue;
         }
-        if (msg.type == MessageType::UsersListResponse) {
-            userList->clear();
-            ssrcToUser.clear();
-            const QStringList users = QString::fromUtf8(msg.payload).split("\n", Qt::SkipEmptyParts);
-            for (const QString &u : users) {
-                if (!userVoiceGains.contains(u)) {
-                    userVoiceGains.insert(u, 1.0);
+    if (msg.type == MessageType::UsersListResponse) {
+        userList->clear();
+        ssrcToUser.clear();
+        const QStringList users = QString::fromUtf8(msg.payload).split("\n", Qt::SkipEmptyParts);
+        for (const QString &u : users) {
+            if (!userVoiceGains.contains(u)) {
+                userVoiceGains.insert(u, 1.0);
+            }
+            ssrcToUser.insert(ssrcForUser(u), u);
+            QListWidgetItem *it = new QListWidgetItem(streamingUsers.contains(u) ? QStringLiteral("%1  [LIVE]").arg(u) : u, userList);
+            it->setData(Qt::UserRole, u);
+        }
+        continue;
+    }
+    if (msg.type == MessageType::VoiceChunk) {
+        processIncomingVoice(msg.sender, msg.payload, voice.audioFormat());
+        continue;
+    }
+        if (msg.type == MessageType::StreamAudio) {
+            ensureStreamAudioOutput();
+            if (streamAudioOutputDevice) {
+                // payload: seq (u32 big endian) + ts (qint64 big endian) + PCM data
+                if (msg.payload.size() > static_cast<int>(sizeof(quint32) + sizeof(qint64))) {
+                    QByteArray pcm = msg.payload.mid(sizeof(quint32) + sizeof(qint64));
+                    streamAudioOutputDevice->write(pcm);
                 }
                 ssrcToUser.insert(ssrcForUser(u), u);
                 QListWidgetItem *it = new QListWidgetItem(streamingUsers.contains(u) ? QStringLiteral("%1  [LIVE]").arg(u) : u, userList);
@@ -805,24 +820,6 @@ void ChatWindow::onSocketReadyRead() {
             handleScreenFrameMessage(msg.sender, msg.payload);
             continue;
         }
-        if (msg.type == MessageType::Ping) {
-            Message pong;
-            pong.type = MessageType::Pong;
-            pong.sender = auth.currentUsername();
-            pong.timestampMs = QDateTime::currentMSecsSinceEpoch();
-            pong.payload = QByteArrayLiteral("pong");
-            socket.write(MessageProtocol::encodeMessage(pong));
-            continue;
-        }
-        if (msg.type == MessageType::Pong) {
-            if (awaitingPong) {
-                const qint64 rtt = QDateTime::currentMSecsSinceEpoch() - lastPingSentMs;
-                pingLabel->setText(QStringLiteral("Ping: %1 ms").arg(rtt));
-                pingLabel->setStyleSheet("color: green");
-                awaitingPong = false;
-            }
-            continue;
-        }
         if (msg.type == MessageType::Error) {
             appendLog(QStringLiteral("Server error: %1").arg(QString::fromUtf8(msg.payload)));
         }
@@ -830,19 +827,71 @@ void ChatWindow::onSocketReadyRead() {
 }
 
 void ChatWindow::handleScreenFrameMessage(const QString &sender, const QByteArray &payload) {
-    dispatchVideoPayload(sender, payload);
+    if (payload.isEmpty()) {
+        streamingUsers.remove(sender);
+        streamFrames.remove(sender);
+        lastFrameIdReceived.remove(sender);
+        if (watchingRemote && currentStreamUser == sender) {
+            watchingRemote = false;
+            currentStreamUser.clear();
+            sharePreview->clear();
+            sharePreview->setVisible(false);
+            streamVolumeLabel->setVisible(false);
+            streamVolumeSlider->setVisible(false);
+        }
+        updateUserListDisplay();
+        return;
+    }
+    QDataStream ds(payload);
+    ds.setByteOrder(QDataStream::BigEndian);
+    quint32 frameId = 0;
+    ds >> frameId;
+    QByteArray encoded = payload.mid(static_cast<int>(sizeof(quint32)));
+    if (frameId == 0) {
+        h264Decoder.setConfig(encoded);
+        if (!decoderReady) decoderReady = h264Decoder.init();
+        return;
+    }
+    if (frameId == 0xFFFFFFFE) {
+        streamingUsers.remove(sender);
+        streamFrames.remove(sender);
+        lastFrameIdReceived.remove(sender);
+        if (watchingRemote && currentStreamUser == sender) {
+            watchingRemote = false;
+            currentStreamUser.clear();
+            sharePreview->clear();
+            sharePreview->setVisible(false);
+        }
+        updateUserListDisplay();
+        return;
+    }
+    if (frameId == 0xFFFFFFFF) {
+        streamingUsers.insert(sender);
+        updateUserListDisplay();
+        return;
+    }
+    quint32 &lastId = lastFrameIdReceived[sender];
+    if (frameId <= lastId) {
+        return; // stale
+    }
+    lastId = frameId;
+    if (!decoderReady) decoderReady = h264Decoder.init();
+    QImage image = decoderReady ? h264Decoder.decode(encoded) : QImage();
+    if (!image.isNull()) {
+        QPixmap pix = QPixmap::fromImage(image);
+        streamFrames[sender] = pix;
+        streamingUsers.insert(sender);
+        if (watchingRemote && currentStreamUser == sender) {
+            sharePreview->setFrame(pix);
+            sharePreview->setVisible(true);
+            streamVolumeLabel->setVisible(true);
+            streamVolumeSlider->setVisible(true);
+        }
+        updateUserListDisplay();
+    }
 }
 
 void ChatWindow::handleVoiceUdp() {
-    struct PendingVoice {
-        MediaHeader header{};
-        QByteArray payload;
-    };
-    auto isSeqNewer = [](quint16 current, quint16 previous) {
-        return static_cast<quint16>(current - previous) < 0x8000;
-    };
-    QHash<QString, PendingVoice> newest;
-    QHash<QString, PendingVoice> newestStream;
     while (voiceUdp.hasPendingDatagrams()) {
         QByteArray datagram;
         datagram.resize(int(voiceUdp.pendingDatagramSize()));
@@ -852,23 +901,47 @@ void ChatWindow::handleVoiceUdp() {
         MediaHeader hdr{};
         QByteArray payload;
         if (!unpackMediaDatagram(datagram, hdr, payload)) continue;
+        if (hdr.mediaType != 0) continue;
         const QString sender = ssrcToUser.value(hdr.ssrc);
         if (sender.isEmpty()) continue;
-        if (hdr.mediaType == 0) {
-            auto it = newest.find(sender);
-            if (it == newest.end() || isSeqNewer(hdr.seq, it->header.seq)) {
-                newest.insert(sender, PendingVoice{hdr, payload});
-            }
-        } else if (hdr.mediaType == 2) {
-            auto it = newestStream.find(sender);
-            if (it == newestStream.end() || isSeqNewer(hdr.seq, it->header.seq)) {
-                newestStream.insert(sender, PendingVoice{hdr, payload});
-            }
-        }
+        processIncomingVoice(sender, payload, voice.audioFormat());
     }
+}
 
-    for (auto it = newest.cbegin(); it != newest.cend(); ++it) {
-        processIncomingVoice(it.key(), it.value().payload, voice.audioFormat());
+void ChatWindow::handleVideoUdp() {
+    while (videoUdp.hasPendingDatagrams()) {
+        QByteArray datagram;
+        datagram.resize(int(videoUdp.pendingDatagramSize()));
+        QHostAddress addr;
+        quint16 port = 0;
+        videoUdp.readDatagram(datagram.data(), datagram.size(), &addr, &port);
+        MediaHeader hdr{};
+        QByteArray payload;
+        if (!unpackMediaDatagram(datagram, hdr, payload)) continue;
+        if (hdr.mediaType != 1) continue;
+        const QString sender = ssrcToUser.value(hdr.ssrc);
+        if (sender.isEmpty()) continue;
+        handleScreenFrameMessage(sender, payload);
+    }
+}
+
+void ChatWindow::processIncomingVoice(const QString &sender, const QByteArray &pcm, const QAudioFormat &fmt) {
+    if (sender.isEmpty() || sender == auth.currentUsername()) return;
+    if (mutedUsers.contains(sender)) return;
+    const qreal gain = userVoiceGains.value(sender, 1.0);
+    if (!userVoiceGains.contains(sender)) {
+        userVoiceGains.insert(sender, 1.0);
+    }
+    const bool unityGain = std::abs(gain - 1.0) < 0.01;
+    const QByteArray payload = (unityGain ? pcm : applyVoiceGain(pcm, gain, fmt));
+    voice.playReceivedAudio(payload);
+}
+
+void ChatWindow::onMicToggle() {
+    if (micMuted) {
+        muteButton->setChecked(true);
+        updateMuteButtonState(true);
+        return;
     }
 
     for (auto it = newestStream.cbegin(); it != newestStream.cend(); ++it) {
@@ -1193,7 +1266,6 @@ void ChatWindow::onEncodedFrame(const QByteArray &data, quint32 frameId, qint64 
         hdr.seq = ++videoSeq;
         const QByteArray pkt = packMediaDatagram(hdr, payload);
         videoUdp.writeDatagram(pkt, QHostAddress(hostValue), kVideoUdpPort);
-
     }
     encodingInProgress = false;
     if (hasPendingFrame) {
@@ -1479,6 +1551,7 @@ void ChatWindow::startConnection() {
     mainPanel->setVisible(false);
     updateLoginStatus("Connecting...", "orange");
     lastFrameIdSent = 0;
+    lastFrameIdReceived.clear();
     voiceSeq = 0;
     videoSeq = 0;
     hasPendingFrame = false;
