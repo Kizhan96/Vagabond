@@ -60,6 +60,9 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
     const QString audioDefault = audioEnabled ? QStringLiteral("true") : QStringLiteral("false");
     const QString videoDefault = videoEnabled ? QStringLiteral("true") : QStringLiteral("false");
 
+    const QString audioDefault = audioEnabled ? QStringLiteral("true") : QStringLiteral("false");
+    const QString videoDefault = videoEnabled ? QStringLiteral("true") : QStringLiteral("false");
+
     const QString html = QString(R"(<!doctype html>
 <html lang="en">
 <head>
