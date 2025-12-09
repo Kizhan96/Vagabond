@@ -1,10 +1,12 @@
 #include "livekit_room_widget.h"
 
-#include <QVBoxLayout>
 #include <QUrl>
+#include <QVBoxLayout>
 
-LiveKitRoomWidget::LiveKitRoomWidget(const QString &url, const QString &token, const QString &roomLabel, QWidget *parent)
-    : QWidget(parent), roomTitle(roomLabel.isEmpty() ? QStringLiteral("Room") : roomLabel) {
+LiveKitRoomWidget::LiveKitRoomWidget(const QString &url, const QString &token, const QString &roomLabel,
+                                     bool startWithAudio, bool startWithVideo, QWidget *parent)
+    : QWidget(parent), roomTitle(roomLabel.isEmpty() ? QStringLiteral("Room") : roomLabel),
+      audioEnabled(startWithAudio), videoEnabled(startWithVideo) {
     auto *layout = new QVBoxLayout(this);
     webView = new QWebEngineView(this);
     connect(webView->page(), &QWebEnginePage::featurePermissionRequested,
@@ -43,6 +45,9 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
     const QString urlJs = escapeForJs(url);
     const QString tokenJs = escapeForJs(token);
     const QString roomLabelJs = escapeForJs(roomLabel);
+
+    const QString audioDefault = audioEnabled ? QStringLiteral("true") : QStringLiteral("false");
+    const QString videoDefault = videoEnabled ? QStringLiteral("true") : QStringLiteral("false");
 
     const QString html = QString(R"(<!doctype html>
 <html lang="en">
@@ -108,6 +113,9 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
     const url = '%3';
     const token = '%4';
     const roomLabel = '%5';
+    const startWithAudio = %6;
+    const startWithVideo = %7;
+    const LK = window.LiveKit || window.LiveKitClient;
     const logs = document.getElementById('logs');
     const status = document.getElementById('status');
     const videos = document.getElementById('videos');
@@ -123,6 +131,11 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
 
     let room;
     let screenSharePub;
+
+    if (!LK) {
+      status.textContent = 'Connection failed: LiveKit script not loaded';
+      log('LiveKit client library was not found on the page');
+    }
 
     function log(line) {
       const el = document.createElement('div');
@@ -185,7 +198,7 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
       if (!room) return;
       const constraints = kind === 'audio' ? { audio: { deviceId: { exact: deviceId } }, video: false }
                                            : { audio: false, video: { deviceId: { exact: deviceId } } };
-      const tracks = await LiveKit.createLocalTracks(constraints);
+      const tracks = await LK.createLocalTracks(constraints);
       const newTrack = tracks.find(t => t.kind === kind);
       if (!newTrack) return;
 
@@ -246,18 +259,30 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
         await populateDevices();
         const audioConstraint = micSelect.value ? { deviceId: { exact: micSelect.value } } : true;
         const videoConstraint = camSelect.value ? { deviceId: { exact: camSelect.value } } : true;
-        room = await LiveKit.connect(url, token, { autoSubscribe: true });
+        if (!LK) {
+          throw new Error('LiveKit client is not available');
+        }
+        room = await LK.connect(url, token, { autoSubscribe: true });
         window.room = room;
         status.textContent = 'Connected as ' + room.localParticipant.identity;
         log('Connected to ' + roomLabel);
 
-        const localTracks = await LiveKit.createLocalTracks({ audio: audioConstraint, video: videoConstraint });
-        localTracks.forEach(t => {
-          room.localParticipant.publishTrack(t);
+        muteAudioBtn.textContent = startWithAudio ? 'Mute audio' : 'Unmute audio';
+        muteVideoBtn.textContent = startWithVideo ? 'Mute video' : 'Unmute video';
+
+        const localTracks = await LK.createLocalTracks({ audio: audioConstraint, video: videoConstraint });
+        for (const t of localTracks) {
+          const pub = await room.localParticipant.publishTrack(t);
           if (t.kind === 'video') {
             addVideoElement(t, true, true);
+            if (!startWithVideo) {
+              await pub.setMuted(true);
+            }
           }
-        });
+          if (t.kind === 'audio' && !startWithAudio) {
+            await pub.setMuted(true);
+          }
+        }
 
         room.participants.forEach(p => {
           p.tracks.forEach(attachTrack);
@@ -320,7 +345,7 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
   </script>
 </body>
 </html>
-)").arg(urlJs, roomLabelJs, urlJs, tokenJs, roomLabelJs);
+)").arg(urlJs, roomLabelJs, urlJs, tokenJs, roomLabelJs, audioDefault, videoDefault);
 
     return html;
 }
