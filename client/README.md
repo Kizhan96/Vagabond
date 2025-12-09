@@ -38,5 +38,5 @@ The UI is pre-filled with `test` / `test` credentials and a `general` room for q
 4. Chat with other participants via the text box; messages are sent over LiveKit's data channels. Open additional rooms with new labels; close tabs to disconnect.
 
 If your network blocks the CDN, type a **SDK URL override** before connecting. The loader tries your override first, then a
-`livekit-client.min.js` file placed next to the executable, the official CDN, unpkg, and two URLs derived from your LiveKit host
-(`https://<host>/livekit-client.min.js` and `/static/livekit-client.min.js`).
+`livekit-client.min.js` file placed next to the executable, the jsDelivr build, the official CDN, unpkg, and two URLs derived from your LiveKit host
+(`https://<host>/livekit-client.min.js` and `/static/livekit-client.min.js`). If a script loads without exposing a global, the loader now retries as an ESM module via dynamic `import()`.

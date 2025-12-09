@@ -141,6 +141,7 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
     const lkSources = [
       ...(sdkOverride ? [sdkOverride] : []),
       ...(localSdk ? [localSdk] : []),
+      'https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js',
       'https://cdn.livekit.io/js/1.15.7/livekit-client.min.js',
       'https://unpkg.com/livekit-client@1.15.7/dist/livekit-client.umd.min.js',
       ...(serverBase ? [
@@ -165,36 +166,64 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
     let room;
     let screenSharePub;
 
-    function loadScriptSequential(sources) {
+    function resolveLiveKitGlobal() {
+      return window.LiveKit || window.LiveKitClient || window.LivekitClient || window.livekit || window.livekitClient;
+    }
+
+    function deriveModuleUrl(src) {
+      if (!src.endsWith('.js')) return src;
+      if (src.includes('livekit-client.umd')) return src.replace('livekit-client.umd', 'livekit-client.esm');
+      if (src.endsWith('.min.js')) return src.replace('.min.js', '.esm.min.js');
+      return src.replace('.js', '.esm.js');
+    }
+
+    async function loadFromSource(src) {
       return new Promise((resolve, reject) => {
-        const tryIndex = (idx) => {
-          if (idx >= sources.length) {
-            reject(new Error('LiveKit client is not available'));
+        const script = document.createElement('script');
+        script.src = src;
+        script.async = true;
+        script.onload = async () => {
+          LK = resolveLiveKitGlobal();
+          if (LK) {
+            log('Loaded LiveKit client from ' + src);
+            resolve(LK);
             return;
           }
 
-          const script = document.createElement('script');
-          script.src = sources[idx];
-          script.async = true;
-          script.onload = () => {
-            LK = window.LiveKit || window.LiveKitClient;
+          log('Script loaded but LiveKit global missing: ' + src);
+          const moduleSrc = deriveModuleUrl(src);
+          try {
+            const mod = await import(moduleSrc);
+            LK = mod && (mod.default || mod.LiveKitClient || mod.LiveKit || mod);
             if (LK) {
-              log('Loaded LiveKit client from ' + sources[idx]);
+              log('Loaded LiveKit client via module from ' + moduleSrc);
               resolve(LK);
               return;
             }
-            log('Script loaded but LiveKit global missing: ' + sources[idx]);
-            tryIndex(idx + 1);
-          };
-          script.onerror = () => {
-            log('Failed to load LiveKit client from ' + sources[idx]);
-            tryIndex(idx + 1);
-          };
-          document.head.appendChild(script);
-        };
+          } catch (err) {
+            log('Module import failed from ' + moduleSrc + ': ' + err);
+          }
 
-        tryIndex(0);
+          reject(new Error('LiveKit global missing after load'));
+        };
+        script.onerror = () => {
+          log('Failed to load LiveKit client from ' + src);
+          reject(new Error('Load failed'));
+        };
+        document.head.appendChild(script);
       });
+    }
+
+    async function loadScriptSequential(sources) {
+      for (const src of sources) {
+        try {
+          const loaded = await loadFromSource(src);
+          if (loaded) return loaded;
+        } catch (err) {
+          // Continue to next source
+        }
+      }
+      throw new Error('LiveKit client is not available');
     }
 
     async function ensureLiveKit() {

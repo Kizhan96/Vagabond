@@ -50,9 +50,8 @@ Override the endpoint with `LIVEKIT_AUTH_URL` if your backend differs. The UI de
 toggles), and renders remote participants. Use the **Share screen** control in each tab to present your desktop through LiveKit.
 
 If your environment blocks the CDN, set the **SDK URL override** field before connecting. The client will try that URL first and then fall back to a
-copy of `livekit-client.min.js` placed next to the executable, the official CDN, unpkg, and finally to URLs derived from your LiveKit server (e.g.,
-`https://<your-host>/livekit-client.min.js` and `/static/livekit-client.min.js`).
-
+copy of `livekit-client.min.js` placed next to the executable, the jsDelivr build, the official CDN, unpkg, and finally to URLs derived from your LiveKit server (e.g.,
+`https://<your-host>/livekit-client.min.js` and `/static/livekit-client.min.js`). If those scripts load without a global, the loader now also tries the corresponding ESM URLs via dynamic `import()`.
 ## Windows build & deployment tips
 
 - Prefer a **Release** build unless you have the Qt *debug* libraries installed. A debug build searches for `Qt6Widgetsd.dll` and the other `*d.dll` binaries; if you only installed the default release components, rebuild with `-DCMAKE_BUILD_TYPE=Release` to avoid the missing-debug-DLL error.
