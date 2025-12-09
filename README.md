@@ -28,6 +28,16 @@ Vagabond
 
 ## Setup
 
+### Install Qt 6 and media dependencies (Linux)
+
+If `cmake` fails with `Qt6 package not available`, install the Qt 6 toolchain and FFmpeg development headers first. On Debian/Ubuntu you can run:
+
+```
+sudo ./scripts/install-qt-linux.sh
+```
+
+This installs Qt 6 (base, tools, multimedia, and declarative), FFmpeg dev libraries, and common build prerequisites so the client can be configured and built locally.
+
 1. **Clone**
    ```
    git clone <repository-url>
