@@ -1,6 +1,6 @@
 # Vagabond
 
-Vagabond is a Qt 6.9.1 C++ desktop client that speaks directly to LiveKit. Media is handled by the LiveKit JavaScript SDK inside a Qt WebEngine view, including screen sharing via `getDisplayMedia`. The client authenticates with a simple **login/password** form and exchanges them for a LiveKit access token via your backend (defaults to `https://livekit.vagabovnr.moscow/token`).
+Vagabond is a Qt 6.9.1 C++ desktop client that speaks directly to LiveKit. Media is handled by the LiveKit JavaScript SDK inside a Qt WebEngine view, including screen sharing via `getDisplayMedia`. The client authenticates with a simple **login/password** form and exchanges them for a LiveKit access token via your backend (defaults to `https://livekit.vagabovnr.moscow/api/token`).
 
 ## Features
 
@@ -38,7 +38,7 @@ Vagabond
 ## Run
 
 Point the client at your LiveKit Cloud instance or self-hosted LiveKit server. The UI now lets you edit the auth URL directly;
-by default it talks to `https://livekit.vagabovnr.moscow/token` to exchange a `login`/`room` payload (optionally including `password`) for a JSON
+by default it talks to `https://livekit.vagabovnr.moscow/api/token` to exchange a `login`/`room` payload (optionally including `password`) for a JSON
 response:
 
 ```json

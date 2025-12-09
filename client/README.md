@@ -4,7 +4,7 @@ This is a Qt desktop shell around the LiveKit JavaScript SDK. Each voice/video r
 
 ## Features
 
-- Join any LiveKit room after exchanging a login/room payload for a LiveKit JWT via the configurable auth URL (defaults to `https://livekit.vagabovnr.moscow/token`).
+- Join any LiveKit room after exchanging a login/room payload for a LiveKit JWT via the configurable auth URL (defaults to `https://livekit.vagabovnr.moscow/api/token`).
 - Embedded UI exposes mute/unmute, device switching for mic/camera, one-click screen share, and in-room chat (LiveKit data channel).
 - Event log per tab plus a global log showing when you open/close rooms.
 
@@ -21,10 +21,10 @@ cmake --build .
 
 ## Run
 
-Point the client at your auth endpoint (defaults to `https://livekit.vagabovnr.moscow/token`):
+Point the client at your auth endpoint (defaults to `https://livekit.vagabovnr.moscow/api/token`):
 
 ```powershell
-$env:LIVEKIT_AUTH_URL="https://livekit.vagabovnr.moscow/token"  # optional, defaults to this; UI field wins
+$env:LIVEKIT_AUTH_URL="https://livekit.vagabovnr.moscow/api/token"  # optional, defaults to this; UI field wins
 ./client.exe
 ```
 

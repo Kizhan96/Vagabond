@@ -54,7 +54,6 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
 <head>
   <meta charset="utf-8" />
   <title>LiveKit Desktop Client</title>
-  <script src="https://cdn.livekit.io/js/1.15.7/livekit-client.min.js"></script>
   <style>
     :root {
       color-scheme: dark;
@@ -115,7 +114,10 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
     const roomLabel = '%5';
     const startWithAudio = %6;
     const startWithVideo = %7;
-    const LK = window.LiveKit || window.LiveKitClient;
+    const lkSources = [
+      'https://cdn.livekit.io/js/1.15.7/livekit-client.min.js',
+      'https://unpkg.com/livekit-client@1.15.7/dist/livekit-client.umd.min.js'
+    ];
     const logs = document.getElementById('logs');
     const status = document.getElementById('status');
     const videos = document.getElementById('videos');
@@ -129,12 +131,45 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
     const chatInput = document.getElementById('chatInput');
     const chatSend = document.getElementById('chatSend');
 
+    let LK;
     let room;
     let screenSharePub;
 
-    if (!LK) {
-      status.textContent = 'Connection failed: LiveKit script not loaded';
-      log('LiveKit client library was not found on the page');
+    function loadScriptSequential(sources) {
+      return new Promise((resolve, reject) => {
+        const tryIndex = (idx) => {
+          if (idx >= sources.length) {
+            reject(new Error('LiveKit client is not available'));
+            return;
+          }
+
+          const script = document.createElement('script');
+          script.src = sources[idx];
+          script.async = true;
+          script.onload = () => {
+            LK = window.LiveKit || window.LiveKitClient;
+            if (LK) {
+              log('Loaded LiveKit client from ' + sources[idx]);
+              resolve(LK);
+              return;
+            }
+            log('Script loaded but LiveKit global missing: ' + sources[idx]);
+            tryIndex(idx + 1);
+          };
+          script.onerror = () => {
+            log('Failed to load LiveKit client from ' + sources[idx]);
+            tryIndex(idx + 1);
+          };
+          document.head.appendChild(script);
+        };
+
+        tryIndex(0);
+      });
+    }
+
+    async function ensureLiveKit() {
+      if (LK) return LK;
+      return loadScriptSequential(lkSources);
     }
 
     function log(line) {
@@ -259,9 +294,7 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
         await populateDevices();
         const audioConstraint = micSelect.value ? { deviceId: { exact: micSelect.value } } : true;
         const videoConstraint = camSelect.value ? { deviceId: { exact: camSelect.value } } : true;
-        if (!LK) {
-          throw new Error('LiveKit client is not available');
-        }
+        const LK = await ensureLiveKit();
         room = await LK.connect(url, token, { autoSubscribe: true });
         window.room = room;
         status.textContent = 'Connected as ' + room.localParticipant.identity;

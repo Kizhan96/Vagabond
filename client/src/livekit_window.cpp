@@ -18,7 +18,7 @@ LiveKitWindow::LiveKitWindow(QWidget *parent) : QMainWindow(parent) {
     const QString defaultAuthUrl = QString::fromUtf8(qgetenv("LIVEKIT_AUTH_URL"));
     authUrlInput = new QLineEdit(this);
     authUrlInput->setPlaceholderText(QStringLiteral("Auth URL"));
-    authUrlInput->setText(defaultAuthUrl.isEmpty() ? QStringLiteral("https://livekit.vagabovnr.moscow/token")
+    authUrlInput->setText(defaultAuthUrl.isEmpty() ? QStringLiteral("https://livekit.vagabovnr.moscow/api/token")
                                                    : defaultAuthUrl);
     usernameInput = new QLineEdit(this);
     usernameInput->setPlaceholderText(QStringLiteral("login"));
@@ -106,7 +106,7 @@ void LiveKitWindow::connectToLiveKit() {
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
 
     setFormEnabled(false);
-    statusLabel->setText(tr("Requesting LiveKit token…"));
+        statusLabel->setText(tr("Requesting LiveKit token…"));
     appendLog(tr("Contacting %1").arg(endpoint.toString()));
     pendingAuthReply = network.post(request, QJsonDocument(payload).toJson());
     lastIdentity = identity;
@@ -200,7 +200,7 @@ void LiveKitWindow::setFormEnabled(bool enabled) {
 QUrl LiveKitWindow::authEndpoint() const {
     QString fromField = authUrlInput->text().trimmed();
     if (fromField.isEmpty()) {
-        fromField = QStringLiteral("https://livekit.vagabovnr.moscow/token");
+        fromField = QStringLiteral("https://livekit.vagabovnr.moscow/api/token");
     }
 
     return QUrl(fromField);
