@@ -26,6 +26,7 @@ private:
     void openRoomTab(const QString &url, const QString &token, const QString &room,
                      bool startWithAudio, bool startWithVideo);
 
+    QLineEdit *authUrlInput {nullptr};
     QLineEdit *usernameInput {nullptr};
     QLineEdit *passwordInput {nullptr};
     QLineEdit *roomInput {nullptr};

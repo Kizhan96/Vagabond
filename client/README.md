@@ -4,7 +4,7 @@ This is a Qt desktop shell around the LiveKit JavaScript SDK. Each voice/video r
 
 ## Features
 
-- Join any LiveKit room after exchanging a login/password/room payload for a LiveKit JWT via `LIVEKIT_AUTH_URL` (defaults to `https://livekit.vagabovnr.moscow/api/token`).
+- Join any LiveKit room after exchanging a login/room payload for a LiveKit JWT via the configurable auth URL (defaults to `https://livekit.vagabovnr.moscow/token`).
 - Embedded UI exposes mute/unmute, device switching for mic/camera, one-click screen share, and in-room chat (LiveKit data channel).
 - Event log per tab plus a global log showing when you open/close rooms.
 
@@ -21,10 +21,10 @@ cmake --build .
 
 ## Run
 
-Point the client at your auth endpoint (defaults to `https://livekit.vagabovnr.moscow/api/token`):
+Point the client at your auth endpoint (defaults to `https://livekit.vagabovnr.moscow/token`):
 
 ```powershell
-$env:LIVEKIT_AUTH_URL="https://livekit.vagabovnr.moscow/api/token"  # optional, defaults to this
+$env:LIVEKIT_AUTH_URL="https://livekit.vagabovnr.moscow/token"  # optional, defaults to this; UI field wins
 ./client.exe
 ```
 
@@ -32,7 +32,7 @@ The UI is pre-filled with `test` / `test` credentials and a `general` room for q
 
 ## Usage
 
-1. Enter login, password, and a room label (or keep the defaults). Choose whether to join with microphone and/or camera on.
-2. Click **Sign in & join**. The app calls `LIVEKIT_AUTH_URL` with `{ identity, password, room }`, then opens a tab using the returned token and LiveKit URL.
+1. Enter the auth URL (if your server differs), login, optional password, and a room label (or keep the defaults). Choose whether to join with microphone and/or camera on.
+2. Click **Sign in & join**. The app calls `LIVEKIT_AUTH_URL` with `{ identity, roomName, room, password? }`, then opens a tab using the returned token and LiveKit URL (honoring `livekitUrl` or `url`).
 3. In the tab, use the inline controls to mute/unmute audio, pick input devices, or start/stop **screen sharing**. Camera video is optional.
 4. Chat with other participants via the text box; messages are sent over LiveKit's data channels. Open additional rooms with new labels; close tabs to disconnect.

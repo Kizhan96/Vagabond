@@ -15,6 +15,11 @@ LiveKitWindow::LiveKitWindow(QWidget *parent) : QMainWindow(parent) {
     auto *layout = new QVBoxLayout(central);
 
     auto *authLayout = new QHBoxLayout();
+    const QString defaultAuthUrl = QString::fromUtf8(qgetenv("LIVEKIT_AUTH_URL"));
+    authUrlInput = new QLineEdit(this);
+    authUrlInput->setPlaceholderText(QStringLiteral("Auth URL"));
+    authUrlInput->setText(defaultAuthUrl.isEmpty() ? QStringLiteral("https://livekit.vagabovnr.moscow/token")
+                                                   : defaultAuthUrl);
     usernameInput = new QLineEdit(this);
     usernameInput->setPlaceholderText(QStringLiteral("login"));
     usernameInput->setText(QStringLiteral("test"));
@@ -34,6 +39,8 @@ LiveKitWindow::LiveKitWindow(QWidget *parent) : QMainWindow(parent) {
     videoCheck = new QCheckBox(tr("Join with camera on"), this);
     videoCheck->setChecked(true);
 
+    authLayout->addWidget(new QLabel(tr("Auth URL"), this));
+    authLayout->addWidget(authUrlInput, 2);
     authLayout->addWidget(new QLabel(tr("Login"), this));
     authLayout->addWidget(usernameInput, 1);
     authLayout->addWidget(new QLabel(tr("Password"), this));
@@ -70,9 +77,9 @@ void LiveKitWindow::connectToLiveKit() {
     const QString password = passwordInput->text();
     QString room = roomInput->text().trimmed();
 
-    if (identity.isEmpty() || password.isEmpty()) {
-        statusLabel->setText(tr("Login and password are required"));
-        appendLog(tr("Missing login or password"));
+    if (identity.isEmpty()) {
+        statusLabel->setText(tr("Login is required"));
+        appendLog(tr("Missing login"));
         return;
     }
 
@@ -88,7 +95,11 @@ void LiveKitWindow::connectToLiveKit() {
 
     QJsonObject payload;
     payload.insert(QStringLiteral("identity"), identity);
-    payload.insert(QStringLiteral("password"), password);
+    // Support servers that ignore passwords while keeping parity with older backends.
+    if (!password.isEmpty()) {
+        payload.insert(QStringLiteral("password"), password);
+    }
+    payload.insert(QStringLiteral("roomName"), room);
     payload.insert(QStringLiteral("room"), room);
 
     QNetworkRequest request(endpoint);
@@ -139,9 +150,15 @@ void LiveKitWindow::handleAuthResponse() {
     }
 
     const QJsonObject obj = doc.object();
-    QString url = obj.value(QStringLiteral("url")).toString();
+    QString url = obj.value(QStringLiteral("livekitUrl")).toString();
+    if (url.isEmpty()) {
+        url = obj.value(QStringLiteral("url")).toString();
+    }
+
     const QString token = obj.value(QStringLiteral("token")).toString();
-    const QString room = obj.value(QStringLiteral("room")).toString(roomInput->text().trimmed());
+    const QString room = obj.value(QStringLiteral("roomName"))
+                             .toString(obj.value(QStringLiteral("room"))
+                                           .toString(roomInput->text().trimmed()));
 
     if (url.isEmpty()) {
         url = QStringLiteral("wss://livekit.vagabovnr.moscow");
@@ -171,6 +188,7 @@ void LiveKitWindow::appendLog(const QString &line) {
 }
 
 void LiveKitWindow::setFormEnabled(bool enabled) {
+    authUrlInput->setEnabled(enabled);
     usernameInput->setEnabled(enabled);
     passwordInput->setEnabled(enabled);
     roomInput->setEnabled(enabled);
@@ -180,11 +198,12 @@ void LiveKitWindow::setFormEnabled(bool enabled) {
 }
 
 QUrl LiveKitWindow::authEndpoint() const {
-    const QString fromEnv = QString::fromUtf8(qgetenv("LIVEKIT_AUTH_URL"));
-    if (!fromEnv.isEmpty()) {
-        return QUrl(fromEnv);
+    QString fromField = authUrlInput->text().trimmed();
+    if (fromField.isEmpty()) {
+        fromField = QStringLiteral("https://livekit.vagabovnr.moscow/token");
     }
-    return QUrl(QStringLiteral("https://livekit.vagabovnr.moscow/api/token"));
+
+    return QUrl(fromField);
 }
 
 void LiveKitWindow::openRoomTab(const QString &url, const QString &token, const QString &room,
