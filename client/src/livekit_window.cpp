@@ -2,7 +2,10 @@
 
 #include <QApplication>
 #include <QHBoxLayout>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
+#include <QNetworkRequest>
 #include <QVBoxLayout>
 #include <QWidget>
 #include "livekit_room_widget.h"
@@ -11,33 +14,42 @@ LiveKitWindow::LiveKitWindow(QWidget *parent) : QMainWindow(parent) {
     auto *central = new QWidget(this);
     auto *layout = new QVBoxLayout(central);
 
-    auto *formLayout = new QHBoxLayout();
-    urlInput = new QLineEdit(this);
-    const QString defaultUrl = QString::fromUtf8(qgetenv("LIVEKIT_URL"));
-    urlInput->setPlaceholderText(QStringLiteral("wss://livekit.example.com"));
-    urlInput->setText(defaultUrl.isEmpty() ? QStringLiteral("wss://livekit.vagabovnr.moscow") : defaultUrl);
-    tokenInput = new QLineEdit(this);
-    tokenInput->setPlaceholderText(QStringLiteral("LIVEKIT_TOKEN"));
-    tokenInput->setText(QString::fromUtf8(qgetenv("LIVEKIT_TOKEN")));
+    auto *authLayout = new QHBoxLayout();
+    usernameInput = new QLineEdit(this);
+    usernameInput->setPlaceholderText(QStringLiteral("login"));
+    usernameInput->setText(QStringLiteral("test"));
+    passwordInput = new QLineEdit(this);
+    passwordInput->setPlaceholderText(QStringLiteral("password"));
+    passwordInput->setEchoMode(QLineEdit::Password);
+    passwordInput->setText(QStringLiteral("test"));
     roomInput = new QLineEdit(this);
     roomInput->setPlaceholderText(QStringLiteral("Room label"));
-    roomInput->setText(QStringLiteral("General"));
-    connectButton = new QPushButton(tr("Open room"), this);
-    statusLabel = new QLabel(tr("Provide LiveKit URL, token and room label"), this);
+    roomInput->setText(QStringLiteral("general"));
+    connectButton = new QPushButton(tr("Sign in & join"), this);
+    statusLabel = new QLabel(tr("Enter login, password and room"), this);
+    accountLabel = new QLabel(tr("Not signed in"), this);
 
-    formLayout->addWidget(new QLabel(tr("Server"), this));
-    formLayout->addWidget(urlInput, 2);
-    formLayout->addWidget(new QLabel(tr("Token"), this));
-    formLayout->addWidget(tokenInput, 2);
-    formLayout->addWidget(new QLabel(tr("Room"), this));
-    formLayout->addWidget(roomInput, 1);
-    formLayout->addWidget(connectButton);
+    audioCheck = new QCheckBox(tr("Join with microphone on"), this);
+    audioCheck->setChecked(true);
+    videoCheck = new QCheckBox(tr("Join with camera on"), this);
+    videoCheck->setChecked(true);
+
+    authLayout->addWidget(new QLabel(tr("Login"), this));
+    authLayout->addWidget(usernameInput, 1);
+    authLayout->addWidget(new QLabel(tr("Password"), this));
+    authLayout->addWidget(passwordInput, 1);
+    authLayout->addWidget(new QLabel(tr("Room"), this));
+    authLayout->addWidget(roomInput, 1);
+    authLayout->addWidget(connectButton);
 
     tabWidget = new QTabWidget(this);
     tabWidget->setTabsClosable(true);
 
-    layout->addLayout(formLayout);
+    layout->addLayout(authLayout);
+    layout->addWidget(accountLabel);
     layout->addWidget(statusLabel);
+    layout->addWidget(audioCheck);
+    layout->addWidget(videoCheck);
     layout->addWidget(tabWidget, 1);
 
     setCentralWidget(central);
@@ -49,24 +61,101 @@ LiveKitWindow::LiveKitWindow(QWidget *parent) : QMainWindow(parent) {
 }
 
 void LiveKitWindow::connectToLiveKit() {
-    const QString url = urlInput->text().trimmed();
-    const QString token = tokenInput->text().trimmed();
-    const QString room = roomInput->text().trimmed();
+    if (pendingAuthReply) {
+        pendingAuthReply->deleteLater();
+        pendingAuthReply = nullptr;
+    }
 
-    if (url.isEmpty() || token.isEmpty()) {
-        statusLabel->setText(tr("URL and token are required"));
-        appendLog(tr("Missing URL or token"));
+    const QString identity = usernameInput->text().trimmed();
+    const QString password = passwordInput->text();
+    QString room = roomInput->text().trimmed();
+
+    if (identity.isEmpty() || password.isEmpty()) {
+        statusLabel->setText(tr("Login and password are required"));
+        appendLog(tr("Missing login or password"));
         return;
     }
 
-    const QString label = room.isEmpty() ? QStringLiteral("Room") : room;
-    appendLog(tr("Opening LiveKit room %1").arg(label));
+    if (room.isEmpty()) {
+        room = QStringLiteral("general");
+    }
 
-    auto *roomWidget = new LiveKitRoomWidget(url, token, label, this);
-    const int idx = tabWidget->addTab(roomWidget, label);
-    tabWidget->setCurrentIndex(idx);
+    const QUrl endpoint = authEndpoint();
+    if (!endpoint.isValid()) {
+        statusLabel->setText(tr("Auth endpoint is invalid"));
+        return;
+    }
 
-    statusLabel->setText(tr("Connected tab count: %1").arg(tabWidget->count()));
+    QJsonObject payload;
+    payload.insert(QStringLiteral("identity"), identity);
+    payload.insert(QStringLiteral("password"), password);
+    payload.insert(QStringLiteral("room"), room);
+
+    QNetworkRequest request(endpoint);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+
+    setFormEnabled(false);
+    statusLabel->setText(tr("Requesting LiveKit token…"));
+    appendLog(tr("Contacting %1").arg(endpoint.toString()));
+    pendingAuthReply = network.post(request, QJsonDocument(payload).toJson());
+    lastIdentity = identity;
+
+    connect(pendingAuthReply, &QNetworkReply::finished, this, &LiveKitWindow::handleAuthResponse);
+}
+
+void LiveKitWindow::handleAuthResponse() {
+    auto *reply = qobject_cast<QNetworkReply *>(sender());
+    if (!reply) return;
+
+    reply->deleteLater();
+    if (reply == pendingAuthReply) {
+        pendingAuthReply = nullptr;
+    }
+
+    setFormEnabled(true);
+
+    const QByteArray data = reply->readAll();
+
+    if (reply->error() != QNetworkReply::NoError) {
+        const QVariant status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
+        QString errorText = reply->errorString();
+        if (status.isValid()) {
+            errorText = tr("HTTP %1: %2").arg(status.toInt()).arg(errorText);
+        }
+
+        const QString body = QString::fromUtf8(data).trimmed();
+        if (!body.isEmpty()) {
+            errorText.append(tr(" — %1").arg(body.left(512)));
+        }
+
+        statusLabel->setText(tr("Auth failed: %1").arg(errorText));
+        appendLog(tr("Auth failed: %1").arg(errorText));
+        return;
+    }
+    const QJsonDocument doc = QJsonDocument::fromJson(data);
+    if (!doc.isObject()) {
+        statusLabel->setText(tr("Unexpected response from server"));
+        return;
+    }
+
+    const QJsonObject obj = doc.object();
+    QString url = obj.value(QStringLiteral("url")).toString();
+    const QString token = obj.value(QStringLiteral("token")).toString();
+    const QString room = obj.value(QStringLiteral("room")).toString(roomInput->text().trimmed());
+
+    if (url.isEmpty()) {
+        url = QStringLiteral("wss://livekit.vagabovnr.moscow");
+    }
+
+    if (token.isEmpty()) {
+        statusLabel->setText(tr("Server did not return a LiveKit token"));
+        appendLog(tr("Missing token in response"));
+        return;
+    }
+
+    accountLabel->setText(tr("Signed in as %1").arg(lastIdentity));
+    appendLog(tr("Opening LiveKit room %1").arg(room));
+    openRoomTab(url, token, room, audioCheck->isChecked(), videoCheck->isChecked());
 }
 
 void LiveKitWindow::closeTab(int index) {
@@ -79,4 +168,30 @@ void LiveKitWindow::closeTab(int index) {
 
 void LiveKitWindow::appendLog(const QString &line) {
     statusLabel->setText(line);
+}
+
+void LiveKitWindow::setFormEnabled(bool enabled) {
+    usernameInput->setEnabled(enabled);
+    passwordInput->setEnabled(enabled);
+    roomInput->setEnabled(enabled);
+    connectButton->setEnabled(enabled);
+    audioCheck->setEnabled(enabled);
+    videoCheck->setEnabled(enabled);
+}
+
+QUrl LiveKitWindow::authEndpoint() const {
+    const QString fromEnv = QString::fromUtf8(qgetenv("LIVEKIT_AUTH_URL"));
+    if (!fromEnv.isEmpty()) {
+        return QUrl(fromEnv);
+    }
+    return QUrl(QStringLiteral("https://livekit.vagabovnr.moscow/api/token"));
+}
+
+void LiveKitWindow::openRoomTab(const QString &url, const QString &token, const QString &room,
+                                bool startWithAudio, bool startWithVideo) {
+    const QString label = room.isEmpty() ? QStringLiteral("Room") : room;
+    auto *roomWidget = new LiveKitRoomWidget(url, token, label, startWithAudio, startWithVideo, this);
+    const int idx = tabWidget->addTab(roomWidget, label);
+    tabWidget->setCurrentIndex(idx);
+    statusLabel->setText(tr("Connected tab count: %1").arg(tabWidget->count()));
 }
