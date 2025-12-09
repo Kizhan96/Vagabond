@@ -8,14 +8,14 @@ class LiveKitRoomWidget : public QWidget {
     Q_OBJECT
 public:
     explicit LiveKitRoomWidget(const QString &url, const QString &token, const QString &roomLabel,
-                               bool startWithAudio, bool startWithVideo,
-                               const QString &sdkOverride, QWidget *parent = nullptr);
+                               bool startWithAudio, bool startWithVideo, const QString &sdkOverride,
+                               QWidget *parent = nullptr);
 
     QString title() const { return roomTitle; }
 
 private:
     QString buildHtml(const QString &url, const QString &token, const QString &roomLabel,
-                      const QString &sdkOverride) const;
+                      const QString &sdkOverride, const QString &localSdkPath) const;
     QString escapeForJs(const QString &value) const;
 
     QString roomTitle;

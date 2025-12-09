@@ -1,5 +1,7 @@
 #include "livekit_room_widget.h"
 
+#include <QCoreApplication>
+#include <QFileInfo>
 #include <QUrl>
 #include <QVBoxLayout>
 
@@ -29,7 +31,14 @@ LiveKitRoomWidget::LiveKitRoomWidget(const QString &url, const QString &token, c
             });
     layout->addWidget(webView);
 
-    const QString html = buildHtml(url, token, roomTitle, sdkUrlOverride);
+    QString localSdkCandidate;
+    const QString candidatePath = QCoreApplication::applicationDirPath() + QStringLiteral("/livekit-client.min.js");
+    const QFileInfo candidateFile(candidatePath);
+    if (candidateFile.exists() && candidateFile.isFile()) {
+        localSdkCandidate = QUrl::fromLocalFile(candidateFile.absoluteFilePath()).toString();
+    }
+
+    const QString html = buildHtml(url, token, roomTitle, sdkUrlOverride, localSdkCandidate);
     webView->setHtml(html, QUrl("https://cdn.livekit.io"));
 }
 
@@ -43,11 +52,12 @@ QString LiveKitRoomWidget::escapeForJs(const QString &value) const {
 }
 
 QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, const QString &roomLabel,
-                                     const QString &sdkOverride) const {
+                                     const QString &sdkOverride, const QString &localSdkPath) const {
     const QString urlJs = escapeForJs(url);
     const QString tokenJs = escapeForJs(token);
     const QString roomLabelJs = escapeForJs(roomLabel);
     const QString sdkOverrideJs = escapeForJs(sdkOverride);
+    const QString localSdkJs = escapeForJs(localSdkPath);
 
     QUrl livekitUrl(url);
     QString serverHttpBase;
@@ -56,9 +66,6 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
         serverHttpBase = livekitUrl.toString(QUrl::RemovePath | QUrl::RemoveQuery | QUrl::RemoveFragment);
     }
     const QString serverBaseJs = escapeForJs(serverHttpBase);
-
-    const QString audioDefault = audioEnabled ? QStringLiteral("true") : QStringLiteral("false");
-    const QString videoDefault = videoEnabled ? QStringLiteral("true") : QStringLiteral("false");
 
     const QString audioDefault = audioEnabled ? QStringLiteral("true") : QStringLiteral("false");
     const QString videoDefault = videoEnabled ? QStringLiteral("true") : QStringLiteral("false");
@@ -130,8 +137,10 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
     const startWithVideo = %7;
     const sdkOverride = '%8';
     const serverBase = '%9';
+    const localSdk = '%10';
     const lkSources = [
       ...(sdkOverride ? [sdkOverride] : []),
+      ...(localSdk ? [localSdk] : []),
       'https://cdn.livekit.io/js/1.15.7/livekit-client.min.js',
       'https://unpkg.com/livekit-client@1.15.7/dist/livekit-client.umd.min.js',
       ...(serverBase ? [
@@ -400,7 +409,7 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
 </body>
 </html>
 )").arg(urlJs, roomLabelJs, urlJs, tokenJs, roomLabelJs, audioDefault, videoDefault, sdkOverrideJs,
-        serverBaseJs);
+        serverBaseJs, localSdkJs);
 
     return html;
 }

@@ -37,4 +37,6 @@ The UI is pre-filled with `test` / `test` credentials and a `general` room for q
 3. In the tab, use the inline controls to mute/unmute audio, pick input devices, or start/stop **screen sharing**. Camera video is optional.
 4. Chat with other participants via the text box; messages are sent over LiveKit's data channels. Open additional rooms with new labels; close tabs to disconnect.
 
-If your network blocks the CDN, type a **SDK URL override** before connecting. The loader tries your override first, then the official CDN, unpkg, and two URLs derived from your LiveKit host (`https://<host>/livekit-client.min.js` and `/static/livekit-client.min.js`).
+If your network blocks the CDN, type a **SDK URL override** before connecting. The loader tries your override first, then a
+`livekit-client.min.js` file placed next to the executable, the official CDN, unpkg, and two URLs derived from your LiveKit host
+(`https://<host>/livekit-client.min.js` and `/static/livekit-client.min.js`).

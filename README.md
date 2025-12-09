@@ -49,8 +49,9 @@ Override the endpoint with `LIVEKIT_AUTH_URL` if your backend differs. The UI de
 `general` room. After signing in, a tab opens automatically, publishes audio/video (based on the "Join with microphone/camera on"
 toggles), and renders remote participants. Use the **Share screen** control in each tab to present your desktop through LiveKit.
 
-If your environment blocks the CDN, set the **SDK URL override** field before connecting. The client will try that URL first and then fall back to the
-official CDN, unpkg, and finally to URLs derived from your LiveKit server (e.g., `https://<your-host>/livekit-client.min.js` and `/static/livekit-client.min.js`).
+If your environment blocks the CDN, set the **SDK URL override** field before connecting. The client will try that URL first and then fall back to a
+copy of `livekit-client.min.js` placed next to the executable, the official CDN, unpkg, and finally to URLs derived from your LiveKit server (e.g.,
+`https://<your-host>/livekit-client.min.js` and `/static/livekit-client.min.js`).
 
 ## Windows build & deployment tips
 
