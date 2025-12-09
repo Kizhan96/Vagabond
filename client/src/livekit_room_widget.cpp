@@ -168,8 +168,13 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
 
     function resolveLiveKitGlobal() {
       const lk = window.LiveKit || window.LiveKitClient || window.LivekitClient || window.livekit || window.livekitClient;
-      if (!window.LiveKit && lk) {
-        window.LiveKit = lk; // Normalize to the expected global name
+      if (lk && !window.LiveKit) {
+        // Normalize to the expected global name regardless of how the SDK publishes itself
+        window.LiveKit = lk;
+      }
+      if (!window.LiveKitClient && window.LivekitClient) {
+        // Some LiveKit builds expose `LivekitClient`; make both aliases available
+        window.LiveKitClient = window.LivekitClient;
       }
       return lk;
     }
@@ -201,7 +206,7 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
           const moduleSrc = deriveModuleUrl(src);
           try {
             const mod = await import(moduleSrc);
-            LK = mod && (mod.default || mod.LiveKitClient || mod.LiveKit || mod);
+            LK = mod && (mod.default || mod.LiveKitClient || mod.LivekitClient || mod.LiveKit || mod);
             if (LK) {
               if (!window.LiveKit) {
                 window.LiveKit = LK;
