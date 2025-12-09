@@ -114,13 +114,24 @@ void LiveKitWindow::handleAuthResponse() {
 
     setFormEnabled(true);
 
+    const QByteArray data = reply->readAll();
+
     if (reply->error() != QNetworkReply::NoError) {
-        statusLabel->setText(tr("Auth failed: %1").arg(reply->errorString()));
-        appendLog(tr("Auth failed: %1").arg(reply->errorString()));
+        const QVariant status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
+        QString errorText = reply->errorString();
+        if (status.isValid()) {
+            errorText = tr("HTTP %1: %2").arg(status.toInt()).arg(errorText);
+        }
+
+        const QString body = QString::fromUtf8(data).trimmed();
+        if (!body.isEmpty()) {
+            errorText.append(tr(" — %1").arg(body.left(512)));
+        }
+
+        statusLabel->setText(tr("Auth failed: %1").arg(errorText));
+        appendLog(tr("Auth failed: %1").arg(errorText));
         return;
     }
-
-    const QByteArray data = reply->readAll();
     const QJsonDocument doc = QJsonDocument::fromJson(data);
     if (!doc.isObject()) {
         statusLabel->setText(tr("Unexpected response from server"));
