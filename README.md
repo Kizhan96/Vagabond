@@ -1,12 +1,12 @@
 # Vagabond
 
-Vagabond is a Qt 6.9.1 C++ desktop client that speaks directly to LiveKit. Media is handled by the LiveKit JavaScript SDK inside a Qt WebEngine view, including screen sharing via `getDisplayMedia`.
+Vagabond is a Qt 6.9.1 C++ desktop client that speaks directly to LiveKit. Media is handled by the LiveKit JavaScript SDK inside a Qt WebEngine view, including screen sharing via `getDisplayMedia`. The client authenticates with a simple **login/password** form and exchanges them for a LiveKit access token via your backend (defaults to `https://livekit.vagabovnr.moscow/api/token`).
 
 ## Features
 
-- **LiveKit-native media**: Join any LiveKit room using your endpoint + JWT token; publish local audio/video and screen share.
+- **LiveKit-native media**: Join any LiveKit room using your endpoint + JWT token obtained automatically from your auth server.
 - **Discord-style multi-room tabs**: Open multiple rooms at once, each in its own tab with per-room logs and chat (LiveKit data channel).
-- **Device control**: Inline mute/unmute plus microphone/camera device selection and one-click screen sharing.
+- **Device & account control**: Login with username/password (defaults to `test`/`test`), start with mic/camera on or off, mute/unmute, pick devices, and start/stop screen sharing like a Discord-style client.
 
 ## Project Structure
 
@@ -37,22 +37,16 @@ Vagabond
 
 ## Run
 
-Point the client at your LiveKit Cloud instance or self-hosted LiveKit server.
+Point the client at your LiveKit Cloud instance or self-hosted LiveKit server. By default the client talks to
+`https://livekit.vagabovnr.moscow/api/token` to exchange a `login`/`password`/`room` payload for a JSON response:
 
-1. Create a LiveKit access token for the desired room/user (for example via the LiveKit CLI or REST API).
-2. Launch the Qt client with the LiveKit endpoint and token provided via environment variables or by pasting into the UI:
-
-   - `LIVEKIT_URL` – e.g., `wss://your-host.livekit.cloud`
-   - `LIVEKIT_TOKEN` – JWT produced by your LiveKit API key/secret
-
-Example:
-```
-set LIVEKIT_URL=wss://your-host.livekit.cloud
-set LIVEKIT_TOKEN=eyJhbGciOi...
-./client.exe
+```json
+{ "token": "<livekit jwt>", "url": "wss://livekit.example.com", "room": "general" }
 ```
 
-Once connected, open one or more tabs with room labels; each tab joins the LiveKit room, publishes media, and renders remote participants. Use the **Share screen** control in each tab to present your desktop through LiveKit.
+Override the endpoint with `LIVEKIT_AUTH_URL` if your backend differs. The UI defaults to the test user `test` / `test` and the
+`general` room. After signing in, a tab opens automatically, publishes audio/video (based on the "Join with microphone/camera on"
+toggles), and renders remote participants. Use the **Share screen** control in each tab to present your desktop through LiveKit.
 
 ## Windows build & deployment tips
 
