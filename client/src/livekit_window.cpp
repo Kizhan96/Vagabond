@@ -20,6 +20,8 @@ LiveKitWindow::LiveKitWindow(QWidget *parent) : QMainWindow(parent) {
     authUrlInput->setPlaceholderText(QStringLiteral("Auth URL"));
     authUrlInput->setText(defaultAuthUrl.isEmpty() ? QStringLiteral("https://livekit.vagabovnr.moscow/api/token")
                                                    : defaultAuthUrl);
+    sdkUrlInput = new QLineEdit(this);
+    sdkUrlInput->setPlaceholderText(QStringLiteral("LiveKit JS URL (optional)"));
     usernameInput = new QLineEdit(this);
     usernameInput->setPlaceholderText(QStringLiteral("login"));
     usernameInput->setText(QStringLiteral("test"));
@@ -40,7 +42,7 @@ LiveKitWindow::LiveKitWindow(QWidget *parent) : QMainWindow(parent) {
     videoCheck->setChecked(true);
 
     authLayout->addWidget(new QLabel(tr("Auth URL"), this));
-    authLayout->addWidget(authUrlInput, 2);
+    authLayout->addWidget(authUrlInput, 3);
     authLayout->addWidget(new QLabel(tr("Login"), this));
     authLayout->addWidget(usernameInput, 1);
     authLayout->addWidget(new QLabel(tr("Password"), this));
@@ -49,12 +51,17 @@ LiveKitWindow::LiveKitWindow(QWidget *parent) : QMainWindow(parent) {
     authLayout->addWidget(roomInput, 1);
     authLayout->addWidget(connectButton);
 
+    auto *sdkLayout = new QHBoxLayout();
+    sdkLayout->addWidget(new QLabel(tr("SDK URL override"), this));
+    sdkLayout->addWidget(sdkUrlInput, 1);
+
     tabWidget = new QTabWidget(this);
     tabWidget->setTabsClosable(true);
 
     layout->addLayout(authLayout);
     layout->addWidget(accountLabel);
     layout->addWidget(statusLabel);
+    layout->addLayout(sdkLayout);
     layout->addWidget(audioCheck);
     layout->addWidget(videoCheck);
     layout->addWidget(tabWidget, 1);
@@ -189,6 +196,7 @@ void LiveKitWindow::appendLog(const QString &line) {
 
 void LiveKitWindow::setFormEnabled(bool enabled) {
     authUrlInput->setEnabled(enabled);
+    sdkUrlInput->setEnabled(enabled);
     usernameInput->setEnabled(enabled);
     passwordInput->setEnabled(enabled);
     roomInput->setEnabled(enabled);
@@ -209,7 +217,8 @@ QUrl LiveKitWindow::authEndpoint() const {
 void LiveKitWindow::openRoomTab(const QString &url, const QString &token, const QString &room,
                                 bool startWithAudio, bool startWithVideo) {
     const QString label = room.isEmpty() ? QStringLiteral("Room") : room;
-    auto *roomWidget = new LiveKitRoomWidget(url, token, label, startWithAudio, startWithVideo, this);
+    auto *roomWidget = new LiveKitRoomWidget(url, token, label, startWithAudio, startWithVideo,
+                                             sdkUrlInput->text().trimmed(), this);
     const int idx = tabWidget->addTab(roomWidget, label);
     tabWidget->setCurrentIndex(idx);
     statusLabel->setText(tr("Connected tab count: %1").arg(tabWidget->count()));

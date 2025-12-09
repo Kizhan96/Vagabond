@@ -27,6 +27,7 @@ private:
                      bool startWithAudio, bool startWithVideo);
 
     QLineEdit *authUrlInput {nullptr};
+    QLineEdit *sdkUrlInput {nullptr};
     QLineEdit *usernameInput {nullptr};
     QLineEdit *passwordInput {nullptr};
     QLineEdit *roomInput {nullptr};
