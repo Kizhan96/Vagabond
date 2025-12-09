@@ -1,10 +1,10 @@
 # Vagabond Client
 
-This is a Qt desktop shell around the LiveKit JavaScript SDK. Each voice/video room lives inside its own `QWebEngineView` tab so you can keep multiple LiveKit rooms open at once just like Discord channels. All legacy TCP/UDP/FFmpeg code has been removed; media flows only through LiveKit.
+This is a Qt desktop shell around the LiveKit JavaScript SDK. Each voice/video room lives inside its own `QWebEngineView` tab so you can keep multiple LiveKit rooms open at once just like Discord channels. All legacy TCP/UDP/FFmpeg code has been removed; media flows only through LiveKit. Authentication now happens through a username/password form that asks your backend for a LiveKit access token.
 
 ## Features
 
-- Join any LiveKit room using your LiveKit URL + access token, with a friendly tab title for the room.
+- Join any LiveKit room after exchanging a login/room payload for a LiveKit JWT via the configurable auth URL (defaults to `https://livekit.vagabovnr.moscow/api/token`).
 - Embedded UI exposes mute/unmute, device switching for mic/camera, one-click screen share, and in-room chat (LiveKit data channel).
 - Event log per tab plus a global log showing when you open/close rooms.
 
@@ -21,20 +21,22 @@ cmake --build .
 
 ## Run
 
-Set environment variables for convenience or paste directly into the UI:
-- `LIVEKIT_URL` – e.g., `wss://your-host.livekit.cloud`
-- `LIVEKIT_TOKEN` – JWT created from your LiveKit API key/secret
+Point the client at your auth endpoint (defaults to `https://livekit.vagabovnr.moscow/api/token`):
 
-PowerShell example:
-```
-$env:LIVEKIT_URL="wss://your-host.livekit.cloud"
-$env:LIVEKIT_TOKEN="eyJhbGciOi..."
+```powershell
+$env:LIVEKIT_AUTH_URL="https://livekit.vagabovnr.moscow/api/token"  # optional, defaults to this; UI field wins
 ./client.exe
 ```
 
+The UI is pre-filled with `test` / `test` credentials and a `general` room for quick smoke tests.
+
 ## Usage
 
-1. Enter the LiveKit URL, token, and a short room label, then click **Open room**. A new tab joins the LiveKit room.
-2. Use the inline controls to mute/unmute audio, pick input devices, or start/stop **screen sharing** (primary focus). Camera video is optional.
-3. Chat with other participants via the text box; messages are sent over LiveKit's data channels.
-4. Open additional rooms with new tokens/labels; close tabs to disconnect.
+1. Enter the auth URL (if your server differs), login, optional password, and a room label (or keep the defaults). Choose whether to join with microphone and/or camera on.
+2. Click **Sign in & join**. The app calls `LIVEKIT_AUTH_URL` with `{ identity, roomName, room, password? }`, then opens a tab using the returned token and LiveKit URL (honoring `livekitUrl` or `url`).
+3. In the tab, use the inline controls to mute/unmute audio, pick input devices, or start/stop **screen sharing**. Camera video is optional.
+4. Chat with other participants via the text box; messages are sent over LiveKit's data channels. Open additional rooms with new labels; close tabs to disconnect.
+
+If your network blocks the CDN, type a **SDK URL override** before connecting. The loader tries your override first, then a
+`livekit-client.min.js` file placed next to the executable, the jsDelivr build, the official CDN, unpkg, and two URLs derived from your LiveKit host
+(`https://<host>/livekit-client.min.js` and `/static/livekit-client.min.js`). If a script loads without exposing a global, the loader now retries as an ESM module via dynamic `import()`.

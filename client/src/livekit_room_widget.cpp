@@ -1,10 +1,15 @@
 #include "livekit_room_widget.h"
 
-#include <QVBoxLayout>
+#include <QCoreApplication>
+#include <QFileInfo>
 #include <QUrl>
+#include <QVBoxLayout>
 
-LiveKitRoomWidget::LiveKitRoomWidget(const QString &url, const QString &token, const QString &roomLabel, QWidget *parent)
-    : QWidget(parent), roomTitle(roomLabel.isEmpty() ? QStringLiteral("Room") : roomLabel) {
+LiveKitRoomWidget::LiveKitRoomWidget(const QString &url, const QString &token, const QString &roomLabel,
+                                     bool startWithAudio, bool startWithVideo, const QString &sdkOverride,
+                                     QWidget *parent)
+    : QWidget(parent), roomTitle(roomLabel.isEmpty() ? QStringLiteral("Room") : roomLabel),
+      audioEnabled(startWithAudio), videoEnabled(startWithVideo), sdkUrlOverride(sdkOverride) {
     auto *layout = new QVBoxLayout(this);
     webView = new QWebEngineView(this);
     connect(webView->page(), &QWebEnginePage::featurePermissionRequested,
@@ -26,7 +31,14 @@ LiveKitRoomWidget::LiveKitRoomWidget(const QString &url, const QString &token, c
             });
     layout->addWidget(webView);
 
-    const QString html = buildHtml(url, token, roomTitle);
+    QString localSdkCandidate;
+    const QString candidatePath = QCoreApplication::applicationDirPath() + QStringLiteral("/livekit-client.min.js");
+    const QFileInfo candidateFile(candidatePath);
+    if (candidateFile.exists() && candidateFile.isFile()) {
+        localSdkCandidate = QUrl::fromLocalFile(candidateFile.absoluteFilePath()).toString();
+    }
+
+    const QString html = buildHtml(url, token, roomTitle, sdkUrlOverride, localSdkCandidate);
     webView->setHtml(html, QUrl("https://cdn.livekit.io"));
 }
 
@@ -39,17 +51,30 @@ QString LiveKitRoomWidget::escapeForJs(const QString &value) const {
     return escaped;
 }
 
-QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, const QString &roomLabel) const {
+QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, const QString &roomLabel,
+                                     const QString &sdkOverride, const QString &localSdkPath) const {
     const QString urlJs = escapeForJs(url);
     const QString tokenJs = escapeForJs(token);
     const QString roomLabelJs = escapeForJs(roomLabel);
+    const QString sdkOverrideJs = escapeForJs(sdkOverride);
+    const QString localSdkJs = escapeForJs(localSdkPath);
+
+    QUrl livekitUrl(url);
+    QString serverHttpBase;
+    if (livekitUrl.isValid() && livekitUrl.scheme().startsWith("ws")) {
+        livekitUrl.setScheme(livekitUrl.scheme().startsWith('w') ? "https" : "http");
+        serverHttpBase = livekitUrl.toString(QUrl::RemovePath | QUrl::RemoveQuery | QUrl::RemoveFragment);
+    }
+    const QString serverBaseJs = escapeForJs(serverHttpBase);
+
+    const QString audioDefault = audioEnabled ? QStringLiteral("true") : QStringLiteral("false");
+    const QString videoDefault = videoEnabled ? QStringLiteral("true") : QStringLiteral("false");
 
     const QString html = QString(R"(<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <title>LiveKit Desktop Client</title>
-  <script src="https://cdn.livekit.io/js/1.15.7/livekit-client.min.js"></script>
   <style>
     :root {
       color-scheme: dark;
@@ -108,6 +133,22 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
     const url = '%3';
     const token = '%4';
     const roomLabel = '%5';
+    const startWithAudio = %6;
+    const startWithVideo = %7;
+    const sdkOverride = '%8';
+    const serverBase = '%9';
+    const localSdk = '%10';
+    const lkSources = [
+      ...(sdkOverride ? [sdkOverride] : []),
+      ...(localSdk ? [localSdk] : []),
+      'https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js',
+      'https://cdn.livekit.io/js/1.15.7/livekit-client.min.js',
+      'https://unpkg.com/livekit-client@1.15.7/dist/livekit-client.umd.min.js',
+      ...(serverBase ? [
+        serverBase + '/livekit-client.min.js',
+        serverBase + '/static/livekit-client.min.js'
+      ] : [])
+    ];
     const logs = document.getElementById('logs');
     const status = document.getElementById('status');
     const videos = document.getElementById('videos');
@@ -121,8 +162,74 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
     const chatInput = document.getElementById('chatInput');
     const chatSend = document.getElementById('chatSend');
 
+    let LK;
     let room;
     let screenSharePub;
+
+    function resolveLiveKitGlobal() {
+      return window.LiveKit || window.LiveKitClient || window.LivekitClient || window.livekit || window.livekitClient;
+    }
+
+    function deriveModuleUrl(src) {
+      if (!src.endsWith('.js')) return src;
+      if (src.includes('livekit-client.umd')) return src.replace('livekit-client.umd', 'livekit-client.esm');
+      if (src.endsWith('.min.js')) return src.replace('.min.js', '.esm.min.js');
+      return src.replace('.js', '.esm.js');
+    }
+
+    async function loadFromSource(src) {
+      return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = src;
+        script.async = true;
+        script.onload = async () => {
+          LK = resolveLiveKitGlobal();
+          if (LK) {
+            log('Loaded LiveKit client from ' + src);
+            resolve(LK);
+            return;
+          }
+
+          log('Script loaded but LiveKit global missing: ' + src);
+          const moduleSrc = deriveModuleUrl(src);
+          try {
+            const mod = await import(moduleSrc);
+            LK = mod && (mod.default || mod.LiveKitClient || mod.LiveKit || mod);
+            if (LK) {
+              log('Loaded LiveKit client via module from ' + moduleSrc);
+              resolve(LK);
+              return;
+            }
+          } catch (err) {
+            log('Module import failed from ' + moduleSrc + ': ' + err);
+          }
+
+          reject(new Error('LiveKit global missing after load'));
+        };
+        script.onerror = () => {
+          log('Failed to load LiveKit client from ' + src);
+          reject(new Error('Load failed'));
+        };
+        document.head.appendChild(script);
+      });
+    }
+
+    async function loadScriptSequential(sources) {
+      for (const src of sources) {
+        try {
+          const loaded = await loadFromSource(src);
+          if (loaded) return loaded;
+        } catch (err) {
+          // Continue to next source
+        }
+      }
+      throw new Error('LiveKit client is not available');
+    }
+
+    async function ensureLiveKit() {
+      if (LK) return LK;
+      return loadScriptSequential(lkSources);
+    }
 
     function log(line) {
       const el = document.createElement('div');
@@ -185,7 +292,7 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
       if (!room) return;
       const constraints = kind === 'audio' ? { audio: { deviceId: { exact: deviceId } }, video: false }
                                            : { audio: false, video: { deviceId: { exact: deviceId } } };
-      const tracks = await LiveKit.createLocalTracks(constraints);
+      const tracks = await LK.createLocalTracks(constraints);
       const newTrack = tracks.find(t => t.kind === kind);
       if (!newTrack) return;
 
@@ -246,18 +353,28 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
         await populateDevices();
         const audioConstraint = micSelect.value ? { deviceId: { exact: micSelect.value } } : true;
         const videoConstraint = camSelect.value ? { deviceId: { exact: camSelect.value } } : true;
-        room = await LiveKit.connect(url, token, { autoSubscribe: true });
+        const LK = await ensureLiveKit();
+        room = await LK.connect(url, token, { autoSubscribe: true });
         window.room = room;
         status.textContent = 'Connected as ' + room.localParticipant.identity;
         log('Connected to ' + roomLabel);
 
-        const localTracks = await LiveKit.createLocalTracks({ audio: audioConstraint, video: videoConstraint });
-        localTracks.forEach(t => {
-          room.localParticipant.publishTrack(t);
+        muteAudioBtn.textContent = startWithAudio ? 'Mute audio' : 'Unmute audio';
+        muteVideoBtn.textContent = startWithVideo ? 'Mute video' : 'Unmute video';
+
+        const localTracks = await LK.createLocalTracks({ audio: audioConstraint, video: videoConstraint });
+        for (const t of localTracks) {
+          const pub = await room.localParticipant.publishTrack(t);
           if (t.kind === 'video') {
             addVideoElement(t, true, true);
+            if (!startWithVideo) {
+              await pub.setMuted(true);
+            }
           }
-        });
+          if (t.kind === 'audio' && !startWithAudio) {
+            await pub.setMuted(true);
+          }
+        }
 
         room.participants.forEach(p => {
           p.tracks.forEach(attachTrack);
@@ -320,7 +437,8 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
   </script>
 </body>
 </html>
-)").arg(urlJs, roomLabelJs, urlJs, tokenJs, roomLabelJs);
+)").arg(urlJs, roomLabelJs, urlJs, tokenJs, roomLabelJs, audioDefault, videoDefault, sdkOverrideJs,
+        serverBaseJs, localSdkJs);
 
     return html;
 }
