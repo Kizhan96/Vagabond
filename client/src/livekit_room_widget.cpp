@@ -167,7 +167,11 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
     let screenSharePub;
 
     function resolveLiveKitGlobal() {
-      return window.LiveKit || window.LiveKitClient || window.LivekitClient || window.livekit || window.livekitClient;
+      const lk = window.LiveKit || window.LiveKitClient || window.LivekitClient || window.livekit || window.livekitClient;
+      if (!window.LiveKit && lk) {
+        window.LiveKit = lk; // Normalize to the expected global name
+      }
+      return lk;
     }
 
     function deriveModuleUrl(src) {
@@ -185,6 +189,9 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
         script.onload = async () => {
           LK = resolveLiveKitGlobal();
           if (LK) {
+            if (!window.LiveKit) {
+              window.LiveKit = LK;
+            }
             log('Loaded LiveKit client from ' + src);
             resolve(LK);
             return;
@@ -196,6 +203,9 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
             const mod = await import(moduleSrc);
             LK = mod && (mod.default || mod.LiveKitClient || mod.LiveKit || mod);
             if (LK) {
+              if (!window.LiveKit) {
+                window.LiveKit = LK;
+              }
               log('Loaded LiveKit client via module from ' + moduleSrc);
               resolve(LK);
               return;
