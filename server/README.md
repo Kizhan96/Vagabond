@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Vagabond server handles client connections, manages user authentication, facilitates chat and voice communication, and stores message history. It operates as a central hub for multiple clients, ensuring secure and efficient communication.
+**Deprecated**: The project has moved to LiveKit for signaling and media. The Qt client no longer depends on this custom server. Keep this code only if you need the legacy TCP/UDP implementation for reference.
 
 ## Features
 

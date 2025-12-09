@@ -1,13 +1,12 @@
 # Vagabond Client
 
-This is the client component of Vagabond. It handles authentication, chat, voice, history retrieval, screen sharing, and media playback/capture using Qt.
+This is a Qt desktop shell around the LiveKit JavaScript SDK. Each voice/video room lives inside its own `QWebEngineView` tab, so you can keep multiple LiveKit rooms open at once just like Discord channels. The legacy custom TCP/UDP stack has been deprecated in favor of LiveKit's signaling and media transport.
 
 ## Features
 
-- Authentication with optional auto-registration (`APP_REGISTER`).
-- Real-time chat and voice.
-- Screen sharing with H.264 encode/decode pipeline.
-- User list and history retrieval.
+- Join any LiveKit room using your LiveKit URL + access token, with a friendly tab title for the room.
+- Embedded UI exposes mute/unmute, device switching for mic/camera, one-click screen share, and in-room chat (LiveKit data channel).
+- Event log per tab plus a global log showing when you open/close rooms.
 
 ## Setup
 
@@ -22,23 +21,20 @@ cmake --build .
 
 ## Run
 
-Set environment variables if you need non-default connection settings:
-- `APP_HOST` (default `127.0.0.1`)
-- `APP_PORT` (default `12345`)
-- `APP_USER` (default `demo`)
-- `APP_PASS` (default `demo`)
-- `APP_REGISTER` (`1` to register then login, `0` to only login)
+Set environment variables for convenience or paste directly into the UI:
+- `LIVEKIT_URL` – e.g., `wss://your-host.livekit.cloud`
+- `LIVEKIT_TOKEN` – JWT created from your LiveKit API key/secret
 
 PowerShell example:
 ```
-$env:APP_USER="alice"
-$env:APP_PASS="secret"
-$env:APP_REGISTER="1"
+$env:LIVEKIT_URL="wss://your-host.livekit.cloud"
+$env:LIVEKIT_TOKEN="eyJhbGciOi..."
 ./client.exe
 ```
 
 ## Usage
 
-- Log in, then send messages or start voice.
-- Use the screen-share toggle to publish your desktop; recipients see the stream in the user list panel.
-- Adjust mic/output levels in settings if devices change.
+1. Enter the LiveKit URL, token, and a short room label, then click **Open room**. A new tab joins the LiveKit room and publishes your mic/camera.
+2. Use the inline controls to mute/unmute audio or video, pick input devices, or start/stop screen sharing.
+3. Chat with other participants via the text box; messages are sent over LiveKit's data channels.
+4. Open additional rooms with new tokens/labels; close tabs to disconnect.

@@ -6,6 +6,7 @@
 #include <QNetworkReply>
 #include <QJsonDocument>
 #include <QJsonArray>
+#include <QtGlobal>
 
 TelegramBot::TelegramBot(const QString &token,
                          Authentication *auth,
@@ -65,7 +66,24 @@ void TelegramBot::handleMessage(const QJsonObject &message) {
     const QString text = message.value("text").toString();
 
     if (text == "/start") {
-        sendMessage(chatId, "Команды: /register, /reset");
+        sendMessage(chatId, "Команды: /register, /reset, /createtest [кол-во]");
+        return;
+    }
+
+    if (text.startsWith("/createtest")) {
+        const QStringList parts = text.split(' ', Qt::SkipEmptyParts);
+        int count = 5;
+        if (parts.size() >= 2) {
+            bool ok = false;
+            const int parsed = parts.at(1).toInt(&ok);
+            if (!ok || parsed <= 0) {
+                sendMessage(chatId, "Введите положительное число: /createtest 5");
+                return;
+            }
+            count = parsed;
+        }
+        count = qBound(1, count, 50); // защитный лимит
+        createTestUsers(chatId, count);
         return;
     }
 
@@ -167,4 +185,35 @@ void TelegramBot::processUsername(qint64 chatId, qint64 telegramId, const QStrin
 
     sendMessage(chatId, QStringLiteral("Готово! Логин: %1 Пароль: %2").arg(username, pwd));
     m_pending.remove(chatId);
+}
+
+void TelegramBot::createTestUsers(qint64 chatId, int count) {
+    QStringList lines;
+    int created = 0;
+    int suffix = 1;
+
+    while (created < count && suffix < count + 1000) {
+        const QString username = QStringLiteral("testuser%1").arg(suffix);
+        if (!m_auth->userExists(username)) {
+            QString pwd;
+            QString err;
+            if (m_auth->createUserWithRandomPassword(username, &pwd, &err)) {
+                lines << QStringLiteral("%1 / %2").arg(username, pwd);
+                ++created;
+            } else if (!err.isEmpty()) {
+                sendMessage(chatId, QStringLiteral("Ошибка: %1").arg(err));
+                return;
+            }
+        }
+        ++suffix;
+    }
+
+    if (lines.isEmpty()) {
+        sendMessage(chatId, "Не удалось создать тестовых пользователей (все заняты?)");
+        return;
+    }
+
+    QString response = QStringLiteral("Создано %1 аккаунтов:\n").arg(created);
+    response += lines.join('\n');
+    sendMessage(chatId, response);
 }

@@ -2,6 +2,10 @@
 #define TYPES_H
 
 #include <QByteArray>
+#include <QCryptographicHash>
+#include <QDataStream>
+#include <QHash>
+#include <QIODevice>
 #include <QString>
 
 // Unified message kinds shared by client and server.
@@ -17,6 +21,7 @@ enum class MessageType : quint8 {
     UsersListResponse = 9,
     ScreenFrame = 10,
     StreamAudio = 11,
+    UdpPortsAnnouncement = 12,
     Error = 255
 };
 
@@ -32,5 +37,52 @@ struct User {
     QString username;
     QString password; // In a real application, passwords should be hashed
 };
+
+struct MediaHeader {
+    quint8 version = 1;
+    quint8 mediaType = 0;
+    quint8 codec = 0;
+    quint8 flags = 0;
+    quint32 ssrc = 0;
+    quint32 timestampMs = 0;
+    quint16 seq = 0;
+    quint16 payloadLen = 0;
+};
+
+static inline quint32 mediaHeaderSize() {
+    return sizeof(quint8) * 4 + sizeof(quint32) * 2 + sizeof(quint16) * 2;
+}
+
+static inline QByteArray packMediaDatagram(const MediaHeader &hdr, const QByteArray &payload) {
+    QByteArray out;
+    out.reserve(mediaHeaderSize() + payload.size());
+    QDataStream ds(&out, QIODevice::WriteOnly);
+    ds.setByteOrder(QDataStream::BigEndian);
+    ds << hdr.version << hdr.mediaType << hdr.codec << hdr.flags << hdr.ssrc << hdr.timestampMs << hdr.seq
+       << static_cast<quint16>(payload.size());
+    out.append(payload);
+    return out;
+}
+
+static inline bool unpackMediaDatagram(const QByteArray &datagram, MediaHeader &hdr, QByteArray &payload) {
+    if (datagram.size() < static_cast<int>(mediaHeaderSize())) return false;
+    QDataStream ds(datagram);
+    ds.setByteOrder(QDataStream::BigEndian);
+    ds >> hdr.version >> hdr.mediaType >> hdr.codec >> hdr.flags >> hdr.ssrc >> hdr.timestampMs >> hdr.seq >> hdr.payloadLen;
+    if (ds.status() != QDataStream::Ok) return false;
+    if (datagram.size() < static_cast<int>(mediaHeaderSize() + hdr.payloadLen)) return false;
+    payload = datagram.mid(static_cast<int>(mediaHeaderSize()), hdr.payloadLen);
+    return true;
+}
+
+static inline quint32 ssrcForUser(const QString &username) {
+    const QByteArray hash = QCryptographicHash::hash(username.toUtf8(), QCryptographicHash::Sha1);
+    quint32 value = 0;
+    QDataStream ds(hash.left(4));
+    ds.setByteOrder(QDataStream::BigEndian);
+    ds >> value;
+    if (value == 0) value = 1;
+    return value;
+}
 
 #endif // TYPES_H
