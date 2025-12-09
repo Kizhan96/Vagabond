@@ -115,6 +115,7 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
     const roomLabel = '%5';
     const startWithAudio = %6;
     const startWithVideo = %7;
+    const LK = window.LiveKit || window.LiveKitClient;
     const logs = document.getElementById('logs');
     const status = document.getElementById('status');
     const videos = document.getElementById('videos');
@@ -130,6 +131,11 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
 
     let room;
     let screenSharePub;
+
+    if (!LK) {
+      status.textContent = 'Connection failed: LiveKit script not loaded';
+      log('LiveKit client library was not found on the page');
+    }
 
     function log(line) {
       const el = document.createElement('div');
@@ -192,7 +198,7 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
       if (!room) return;
       const constraints = kind === 'audio' ? { audio: { deviceId: { exact: deviceId } }, video: false }
                                            : { audio: false, video: { deviceId: { exact: deviceId } } };
-      const tracks = await LiveKit.createLocalTracks(constraints);
+      const tracks = await LK.createLocalTracks(constraints);
       const newTrack = tracks.find(t => t.kind === kind);
       if (!newTrack) return;
 
@@ -253,7 +259,10 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
         await populateDevices();
         const audioConstraint = micSelect.value ? { deviceId: { exact: micSelect.value } } : true;
         const videoConstraint = camSelect.value ? { deviceId: { exact: camSelect.value } } : true;
-        room = await LiveKit.connect(url, token, { autoSubscribe: true });
+        if (!LK) {
+          throw new Error('LiveKit client is not available');
+        }
+        room = await LK.connect(url, token, { autoSubscribe: true });
         window.room = room;
         status.textContent = 'Connected as ' + room.localParticipant.identity;
         log('Connected to ' + roomLabel);
@@ -261,7 +270,7 @@ QString LiveKitRoomWidget::buildHtml(const QString &url, const QString &token, c
         muteAudioBtn.textContent = startWithAudio ? 'Mute audio' : 'Unmute audio';
         muteVideoBtn.textContent = startWithVideo ? 'Mute video' : 'Unmute video';
 
-        const localTracks = await LiveKit.createLocalTracks({ audio: audioConstraint, video: videoConstraint });
+        const localTracks = await LK.createLocalTracks({ audio: audioConstraint, video: videoConstraint });
         for (const t of localTracks) {
           const pub = await room.localParticipant.publishTrack(t);
           if (t.kind === 'video') {
